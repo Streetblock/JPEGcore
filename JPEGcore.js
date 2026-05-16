@@ -1,6 +1,6 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.7.3 (Fix: Quantization ZigZag Order)
+* Extended Version 1.7.3 (Fix: Save Preservation)
 * * CORES:
 * - Decoder/Encoder/Transformer: Based on v1.6.6 (Fixed Progressive Scan)
 * - Analysis: Based on v1.6.5 (Restored parseStructure & detailed probe)
@@ -817,29 +817,15 @@ const JpegCORE = {
         }
     },
 
-    // --- 6. ENCODER (v1.7.4 - Fixed ZigZag Quantization Order) ---
+    // --- 6. ENCODER (v1.7.3 - Fixed Save Preservation) ---
     Encoder: class {
         constructor(quality, customL, customC) {
             const C = JpegCORE.Constants;
-
-            // Helper: Ensure the default/custom tables (which are usually ZigZag) are converted
-            // to NATURAL order for internal calculations (dct)
-            const toNatural = (zz) => {
-                const n = new Uint8Array(64);
-                const Z = C.ZIG_ZAG;
-                for(let i=0; i<64; i++) n[Z[i]] = zz[i];
-                return n;
-            };
-
-            if (customL && customC) {
-                this.tY = customL;
-                this.tC = customC;
-            } else {
+            if (customL && customC) { this.tY = customL; this.tC = customC; }
+            else {
                 const s = quality < 50 ? 5000 / quality : 200 - quality * 2;
                 const scale = (tbl) => tbl.map(v => Math.floor((v * s + 50) / 100) || 1);
-                // Convert Constants.QUANT_L (ZigZag) to Natural for 'dct' usage
-                this.tY = toNatural(scale(C.QUANT_L));
-                this.tC = toNatural(scale(C.QUANT_C));
+                this.tY = scale(C.QUANT_L); this.tC = scale(C.QUANT_C);
             }
             const H = C.HUFFMAN;
             this.computeHuffmanTbl(H.DC_L_NR, H.DC_L_VAL, H.AC_L_NR, H.AC_L_VAL, H.DC_C_NR, H.DC_C_VAL, H.AC_C_NR, H.AC_C_VAL);
@@ -907,21 +893,12 @@ const JpegCORE = {
             const isGray = (captured.mode === 'GRAY'), numComps = isGray ? 1 : 3;
             const w = captured.w, h = captured.h;
 
+            // --- FIX: Use Original Quantization Tables if available (prevent corruption) ---
             let qY = this.tY, qC = this.tC;
             if (captured.quantTables) {
                 if(captured.quantTables[0]) qY = captured.quantTables[0];
                 if(captured.quantTables[1]) qC = captured.quantTables[1];
             }
-
-            // --- FIX: Convert Natural Tables (Internal) to ZigZag (File Spec) ---
-            const toZigZag = (n) => {
-                const zz = new Uint8Array(64);
-                const Z = JpegCORE.Constants.ZIG_ZAG;
-                // output[i] corresponds to ZigZag index i.
-                // The value comes from Natural index Z[i].
-                for(let i=0; i<64; i++) zz[i] = n[Z[i]];
-                return zz;
-            };
 
             wr(0xFF00 | M.SOI);
             if (metaSegments && metaSegments.length > 0) {
@@ -930,10 +907,7 @@ const JpegCORE = {
                 wr(0xFF00 | M.APP0); wr(16); [0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0].forEach(wb);
             }
 
-            // DQT: Must use ZigZag order
-            wr(0xFF00 | M.DQT); wr(132);
-            wb(0); toZigZag(qY).forEach(v => wb(v));
-            wb(1); toZigZag(qC).forEach(v => wb(v));
+            wr(0xFF00 | M.DQT); wr(132); wb(0); qY.forEach(v => wb(v)); wb(1); qC.forEach(v => wb(v));
 
             wr(0xFF00 | M.SOF0); wr(8 + 3 * numComps); wb(8); wr(h); wr(w); wb(numComps); wb(1); wb((sm.hMax << 4) | sm.vMax); wb(0);
             if (!isGray) { wb(2); wb(0x11); wb(1); wb(3); wb(0x11); wb(1); }
