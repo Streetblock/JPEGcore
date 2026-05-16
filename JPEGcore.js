@@ -423,9 +423,19 @@ const JpegCORE = {
                                         const tbl = tables[0][c.dcTbl]; let s = rh(tbl);
                                         if (s === 'RST') { eob_run = 0; predDC[c.type] = 0; bc=0; s = rh(tbl); } // Reset logic
                                         if (s === 'MARKER') { markerFound = true; break; }
-                                        let diff = 0; if (s) diff = rv(s);
+
+                                        // FIX: Check explicitly for null (error/EOF)
+                                        if (s === null) { markerFound = true; break; }
+
+                                        let diff = 0;
+                                        // FIX: 's' can be 0 (valid diff 0). Only skip if s is falsy AND not 0?
+                                        // Actually for DC, if s=0, diff=0. rv(0) reads 0 bits.
+                                        if (s !== 0) diff = rv(s);
+
                                         predDC[c.type] += diff;
                                         coeffBuffer[blockOffset] = predDC[c.type] << Al;
+                                        // DEBUG DC
+                                        if (m === 0 && c.type === 0) console.log(`[Debug] First DC Y Value: ${predDC[c.type]}`);
                                     } else {
                                         // DC Refine Scan
                                         let bit = nb();
@@ -458,6 +468,8 @@ const JpegCORE = {
                                         while (k <= Se) {
                                             let s = rh(tbl);
                                             if (s === 'MARKER') { markerFound = true; break; }
+                                            if (s === null) { markerFound = true; break; } // Safety break
+
                                             const r = s >> 4, v = s & 15;
 
                                             if (v === 0) {
@@ -468,6 +480,25 @@ const JpegCORE = {
                                                     if (Ah > 0) {
                                                         // Refine rest of this block
                                                         for(; k<=Se; k++) {
+                                                            const idx = blockOffset + ZZ[k];
+                                                            if (coeffBuffer[idx] !== 0) {
+                                                                let bit = nb();
+                                                                if (bit === 1) {
+                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                    else coeffBuffer[idx] -= (1 << Al);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    break; // End of block
+                                                } else {
+                                                    // ZRL: Skip 16 zeroes
+                                                    if (Ah === 0) {
+                                                        k += 15; // Simple skip
+                                                    } else {
+                                                        // Refine while skipping
+                                                        let z = 0;
+                                                        while (z < 16 && k <= Se) {
                                                             const idx = blockOffset + ZZ[k];
                                                             if (coeffBuffer[idx] !== 0) {
                                                                 let bit = nb();
@@ -523,10 +554,17 @@ const JpegCORE = {
                         }
                         if (markerFound) break;
                     }
-                    // Update pos to where we stopped
-                    pos = bp;
-                    // Adjust if we overshot into a marker
-                    if (d[pos-2] === 0xFF && d[pos-1] !== 0x00) pos -= 2;
+
+                    // CRITICAL FIX: Sync pos with bp when a marker is found
+                    if (markerFound) {
+                        // bp points to the byte *after* the FF (the marker type code)
+                        // because 'nb' consumed FF and peeked next byte.
+                        // We want 'pos' to point to the FF so the loop's 'd[pos] == 0xFF' check passes.
+                        pos = bp - 1;
+                    } else {
+                        // Scan ended naturally? Point to where we stopped
+                        pos = bp;
+                    }
 
                 } else if (marker === M.DHT) {
                      // Parse DHT in-between scans
@@ -847,6 +885,31 @@ const JpegCORE = {
                     const temp = captured.blocks[i + cbIndex];
                     captured.blocks[i + cbIndex] = captured.blocks[i + crIndex];
                     captured.blocks[i + crIndex] = temp;
+                }
+            }
+            return captured;
+        },
+
+        shred: function(captured, threshold) {
+            // "Quantization Hack": Zero out frequencies > threshold (1..63)
+            // Threshold 1 = DC only (Abstract art), 10 = Low quality
+            const ZZ = JpegCORE.Constants.ZIG_ZAG;
+            for (let b of captured.blocks) {
+                for(let z = threshold; z < 64; z++) {
+                    b.data[ZZ[z]] = 0;
+                }
+            }
+            return captured;
+        },
+
+        fuzz: function(captured, threshold, amount) {
+            // "Noise Hack": Randomize high frequencies instead of zeroing
+            const ZZ = JpegCORE.Constants.ZIG_ZAG;
+            for (let b of captured.blocks) {
+                for(let z = threshold; z < 64; z++) {
+                     if (Math.random() < 0.2) { // Only touch 20% of coeffs for "snow" look
+                         b.data[ZZ[z]] += (Math.random() - 0.5) * amount;
+                     }
                 }
             }
             return captured;
