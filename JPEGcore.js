@@ -169,6 +169,154 @@ const JpegCORE = {
     },
 
     Decoder: {
+        IDCT: class {
+          constructor() {
+              this.base = [];
+              // Precompute cosine table for IDCT (Inverse)
+              for (let u = 0; u < 8; u++) {
+                  this.base[u] = [];
+                  for (let x = 0; x < 8; x++) {
+                      // Normalization factors (C)
+                      let Cu = (u === 0) ? 1 / Math.sqrt(2) : 1;
+                      this.base[u][x] = Cu * Math.cos(((2 * x + 1) * u * Math.PI) / 16);
+                  }
+              }
+          }
+
+          // Convert 8x8 Frequency Block -> 8x8 Spatial Block
+          transform(coeffs, quantTable) {
+              const out = new Float32Array(64);
+              for (let y = 0; y < 8; y++) {
+                  for (let x = 0; x < 8; x++) {
+                      let sum = 0;
+                      for (let u = 0; u < 8; u++) {
+                          for (let v = 0; v < 8; v++) {
+                              // 1. De-Quantize: coeff * Q-Table value
+                              // 2. IDCT Formula: sum( C(u)C(v) * F(u,v) * cos * cos )
+                              const coefVal = coeffs[u * 8 + v] * quantTable[u * 8 + v];
+                              sum += coefVal * this.base[u][x] * this.base[v][y];
+                          }
+                      }
+                      out[y * 8 + x] = sum * 0.25;
+                  }
+              }
+              return out;
+          }
+        };
+
+        render: function(decoded) {
+            const w = decoded.w;
+            const h = decoded.h;
+            const mode = decoded.mode;
+            const blocks = decoded.blocks;
+
+            // 1. Setup Buffers
+            const finalData = new Uint8ClampedArray(w * h * 4); // RGBA buffer
+            const idctEngine = new JpegCORE.Decoder.IDCT();
+            const SM = JpegCORE.Constants.SAMPLE_MODES[mode];
+
+            // Use Standard Quant Tables (Fallback since DQT wasn't parsed)
+            const Q_L = JpegCORE.Constants.QUANT_L;
+            const Q_C = JpegCORE.Constants.QUANT_C;
+
+            // 2. Iterate over MCUs (Minimum Coded Units)
+            const mcuW = SM.hMax * 8;
+            const mcuH = SM.vMax * 8;
+            const cols = Math.ceil(w / mcuW);
+            const rows = Math.ceil(h / mcuH);
+            const blocksPerMCU = SM.blocks.length;
+
+            let bIdx = 0; // Index into the linear 'blocks' array
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    // Process one MCU
+                    const spatialBlocks = [];
+
+                    // 2a. IDCT all blocks in this MCU
+                    for (let b = 0; b < blocksPerMCU; b++) {
+                        if (bIdx >= blocks.length) break;
+                        const rawBlock = blocks[bIdx++];
+                        const qTable = (rawBlock.type === 'C') ? Q_C : Q_L;
+
+                        // Perform IDCT
+                        spatialBlocks.push({
+                            pixels: idctEngine.transform(rawBlock.data, qTable),
+                            def: SM.blocks[b]
+                        });
+                    }
+
+                    // 2b. Draw pixels for this MCU
+                    const originX = c * mcuW;
+                    const originY = r * mcuH;
+
+                    for (let y = 0; y < mcuH; y++) {
+                        for (let x = 0; x < mcuW; x++) {
+                            const absX = originX + x;
+                            const absY = originY + y;
+                            if (absX >= w || absY >= h) continue;
+
+                            // Find Y value
+                            // Determine which Y-block in the MCU covers this pixel
+                            // (Logic: Map x,y relative to MCU into block indices)
+                            let Y = 0, Cb = 0, Cr = 0;
+
+                            // Fetch Y
+                            for (let sb of spatialBlocks) {
+                                if (sb.def.t === 'Y') {
+                                    // Is pixel (x,y) inside this 8x8 block?
+                                    const bxStart = sb.def.dx * 8;
+                                    const byStart = sb.def.dy * 8;
+                                    if (x >= bxStart && x < bxStart + 8 && y >= byStart && y < byStart + 8) {
+                                        Y = sb.pixels[(y - byStart) * 8 + (x - bxStart)];
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Fetch Chroma (Simple Nearest Neighbor for upsampling)
+                            // Cb/Cr blocks cover larger areas in 4:2:0
+                            for (let sb of spatialBlocks) {
+                                if (sb.def.t === 'C') {
+                                    // Scale down pixel coord to find match in 8x8 chroma block
+                                    // (e.g. in 4:2:0, 16x16 pixels map to 8x8 chroma, so divide coords by 2)
+                                    const scaleX = SM.hMax;
+                                    const scaleY = SM.vMax;
+                                    const cx = Math.floor(x / scaleX);
+                                    const cy = Math.floor(y / scaleY);
+
+                                    if (cx < 8 && cy < 8) {
+                                        const val = sb.pixels[cy * 8 + cx];
+                                        if (sb.def.c === 0) Cb = val; // Cb
+                                        else Cr = val; // Cr
+                                    }
+                                }
+                            }
+
+                            // 3. Color Convert (YCbCr -> RGB)
+                            // (Values are centered at 0 from IDCT, so usually we add 128,
+                            // but the math below assumes standard centered shift)
+                            const pixelY = Y + 128;
+                            const pixelCb = Cb;
+                            const pixelCr = Cr;
+
+                            const R = pixelY + 1.402 * pixelCr;
+                            const G = pixelY - 0.344136 * pixelCb - 0.714136 * pixelCr;
+                            const B = pixelY + 1.772 * pixelCb;
+
+                            const idx = (absY * w + absX) * 4;
+                            finalData[idx] = R;
+                            finalData[idx + 1] = G;
+                            finalData[idx + 2] = B;
+                            finalData[idx + 3] = 255; // Alpha
+                        }
+                    }
+                }
+            }
+
+            return new ImageData(finalData, w, h);
+        };
+
         extractBlocks: async function(file) {
             const buf = await file.arrayBuffer();
             const d = new Uint8Array(buf);
@@ -365,7 +513,9 @@ const JpegCORE = {
             }
             if (z > 0) this.wh(ha, 0); return b[0];
         }
+
         wh(t, v) { const e = t[v]; this.wbt(e.c, e.l); }
+
         wbt(b, l) { for (let i = l - 1; i >= 0; i--) { this.byte = (this.byte << 1) | ((b >> i) & 1); this.cnt++; if (this.cnt === 8) { this.buf.push(this.byte); if (this.byte === 0xFF) this.buf.push(0); this.byte = 0; this.cnt = 0; } } }
     }
 };
