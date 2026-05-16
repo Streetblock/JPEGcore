@@ -267,6 +267,82 @@ const JpegCORE = {
                 const p = this.p;
                 let v0, v1, v2, v3, v4, v5, v6, v7, t;
 
+                // --- Pass 1: Rows ---
+                for (let i = 0; i < 8; ++i) {
+                    const row = 8 * i, blkRow = inOffset + row;
+
+                    // Zero AC check: If all AC coefficients are 0, we can skip the heavy math.
+                    if ((inBuffer[blkRow+1] | inBuffer[blkRow+2] | inBuffer[blkRow+3] |
+                         inBuffer[blkRow+4] | inBuffer[blkRow+5] | inBuffer[blkRow+6] | inBuffer[blkRow+7]) === 0) {
+                        // Precision Fix: Use 11-bit shift for DC scaling to match Loeffler standards
+                        t = (5793 * (inBuffer[blkRow] * qt[row]) + 512) >> 10;
+                        p[row]=t; p[row+1]=t; p[row+2]=t; p[row+3]=t; p[row+4]=t; p[row+5]=t; p[row+6]=t; p[row+7]=t;
+                        continue;
+                    }
+
+                    // Standard Loeffler stages with fixed-point constants
+                    v0 = (5793 * (inBuffer[blkRow+0] * qt[row+0]) + 128) >> 8;
+                    v1 = (5793 * (inBuffer[blkRow+4] * qt[row+4]) + 128) >> 8;
+                    v2 = inBuffer[blkRow+2] * qt[row+2]; v3 = inBuffer[blkRow+6] * qt[row+6];
+                    v4 = (2896 * ((inBuffer[blkRow+1] * qt[row+1]) - (inBuffer[blkRow+7] * qt[row+7])) + 128) >> 8;
+                    v7 = (2896 * ((inBuffer[blkRow+1] * qt[row+1]) + (inBuffer[blkRow+7] * qt[row+7])) + 128) >> 8;
+                    v5 = (inBuffer[blkRow+3] * qt[row+3]) << 4; v6 = (inBuffer[blkRow+5] * qt[row+5]) << 4;
+
+                    t = (v0 - v1 + 1) >> 1; v0 = (v0 + v1 + 1) >> 1; v1 = t;
+                    t = (v2 * 3784 + v3 * 1567 + 128) >> 8; v2 = (v2 * 1567 - v3 * 3784 + 128) >> 8; v3 = t;
+                    t = (v4 - v6 + 1) >> 1; v4 = (v4 + v6 + 1) >> 1; v6 = t;
+                    t = (v7 + v5 + 1) >> 1; v5 = (v7 - v5 + 1) >> 1; v7 = t;
+                    t = (v0 - v3 + 1) >> 1; v0 = (v0 + v3 + 1) >> 1; v3 = t;
+                    t = (v1 - v2 + 1) >> 1; v1 = (v1 + v2 + 1) >> 1; v2 = t;
+                    t = (v4 * 2276 + v7 * 3406 + 2048) >> 12; v4 = (v4 * 3406 - v7 * 2276 + 2048) >> 12; v7 = t;
+                    t = (v5 * 799 + v6 * 4017 + 2048) >> 12; v5 = (v5 * 4017 - v6 * 799 + 2048) >> 12; v6 = t;
+
+                    p[row+0] = v0 + v7; p[row+7] = v0 - v7; p[row+1] = v1 + v6; p[row+6] = v1 - v6;
+                    p[row+2] = v2 + v5; p[row+5] = v2 - v5; p[row+3] = v3 + v4; p[row+4] = v3 - v4;
+                }
+
+                // --- Pass 2: Columns ---
+                for (let i = 0; i < 8; ++i) {
+                    const col = i;
+                    if ((p[8+col] | p[16+col] | p[24+col] | p[32+col] | p[40+col] | p[48+col] | p[56+col]) === 0) {
+                        t = (5793 * p[col] + 8192) >> 14;
+                        t = 128 + ((t + 8) >> 4);
+                        // Strict clamping to 0-255 range
+                        const clamped = t < 0 ? 0 : (t > 255 ? 255 : t);
+                        for(let k=0; k<64; k+=8) outBuffer[outOffset+col+k] = clamped;
+                        continue;
+                    }
+
+                    v0 = (5793 * p[col] + 2048) >> 12; v1 = (5793 * p[32+col] + 2048) >> 12; v2 = p[16+col]; v3 = p[48+col];
+                    v4 = (2896 * (p[8+col] - p[56+col]) + 2048) >> 12; v7 = (2896 * (p[8+col] + p[56+col]) + 2048) >> 12; v5 = p[24+col]; v6 = p[40+col];
+
+                    t = (v0 - v1 + 1) >> 1; v0 = (v0 + v1 + 1) >> 1; v1 = t;
+                    t = (v2 * 3784 + v3 * 1567 + 2048) >> 12; v2 = (v2 * 1567 - v3 * 3784 + 2048) >> 12; v3 = t;
+                    t = (v4 - v6 + 1) >> 1; v4 = (v4 + v6 + 1) >> 1; v6 = t;
+                    t = (v7 + v5 + 1) >> 1; v5 = (v7 - v5 + 1) >> 1; v7 = t;
+                    t = (v0 - v3 + 1) >> 1; v0 = (v0 + v3 + 1) >> 1; v3 = t;
+                    t = (v1 - v2 + 1) >> 1; v1 = (v1 + v2 + 1) >> 1; v2 = t;
+                    t = (v4 * 2276 + v7 * 3406 + 2048) >> 12; v4 = (v4 * 3406 - v7 * 2276 + 2048) >> 12; v7 = t;
+                    t = (v5 * 799 + v6 * 4017 + 2048) >> 12; v5 = (v5 * 4017 - v6 * 799 + 2048) >> 12; v6 = t;
+
+                    const o = outOffset + col;
+                    // Optimized clamping and offset addition
+                    let val;
+                    val = 128 + ((v0 + v7 + 8) >> 4); outBuffer[o]    = val < 0 ? 0 : (val > 255 ? 255 : val);
+                    val = 128 + ((v1 + v6 + 8) >> 4); outBuffer[o+8]  = val < 0 ? 0 : (val > 255 ? 255 : val);
+                    val = 128 + ((v2 + v5 + 8) >> 4); outBuffer[o+16] = val < 0 ? 0 : (val > 255 ? 255 : val);
+                    val = 128 + ((v3 + v4 + 8) >> 4); outBuffer[o+24] = val < 0 ? 0 : (val > 255 ? 255 : val);
+                    val = 128 + ((v3 - v4 + 8) >> 4); outBuffer[o+32] = val < 0 ? 0 : (val > 255 ? 255 : val);
+                    val = 128 + ((v2 - v5 + 8) >> 4); outBuffer[o+40] = val < 0 ? 0 : (val > 255 ? 255 : val);
+                    val = 128 + ((v1 - v6 + 8) >> 4); outBuffer[o+48] = val < 0 ? 0 : (val > 255 ? 255 : val);
+                    val = 128 + ((v0 - v7 + 8) >> 4); outBuffer[o+56] = val < 0 ? 0 : (val > 255 ? 255 : val);
+                }
+            }
+
+            /*_transformLoefflerInt(inBuffer, inOffset, qt, outBuffer, outOffset) {
+                const p = this.p;
+                let v0, v1, v2, v3, v4, v5, v6, v7, t;
+
                 for (let i = 0; i < 8; ++i) {
                     const row = 8 * i, blkRow = inOffset + row;
                     // Zero AC check
@@ -328,7 +404,7 @@ const JpegCORE = {
                     val = 128 + ((v1 - v6 + 8) >> 4); outBuffer[o+48] = val < 0 ? 0 : (val > 255 ? 255 : val);
                     val = 128 + ((v0 - v7 + 8) >> 4); outBuffer[o+56] = val < 0 ? 0 : (val > 255 ? 255 : val);
                 }
-            }
+            }*/
         },
 
         // --- 2. HYBRID DECODER (Final Fix: RST + Progressive EOB Refinement) ---
@@ -629,11 +705,11 @@ const JpegCORE = {
                                                         k++;
                                                     }
                                                 }
-                                              } else {
-                                                  // --- AC SUCCESSIVE (Ah > 0) ROBUST FIX ---
-                                                  // Strategie: "Seek & Refine Loop"
-                                                  // Anstatt einen Status zu speichern, führen wir Runs sofort aus,
-                                                  // indem wir k vorwärts bewegen und dabei alles verfeinern, was im Weg liegt.
+                                            } else {
+                                                // --- AC SUCCESSIVE (Ah > 0) ROBUST FIX ---
+                                                // Strategie: "Seek & Refine Loop"
+                                                // Anstatt einen Status zu speichern, führen wir Runs sofort aus,
+                                                // indem wir k vorwärts bewegen und dabei alles verfeinern, was im Weg liegt.
 
                                                   let k = Math.max(Ss, 1);
                                                   const p1 = 1 << Al;
