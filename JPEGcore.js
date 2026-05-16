@@ -950,17 +950,19 @@ const JpegCORE = {
                                                     let k = Math.max(Ss, 1);
                                                     while (k <= Se) {
                                                         let rs = rh(tbl);
-                                                        if (rs === STAT_MARKER || rs === null) { markerFound = true; break; }
+                                                        if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
                                                         const r = rs >> 4, s = rs & 15;
                                                         if (s === 0) {
                                                             if (r < 15) {
                                                                 let extra = readRawBits(r);
+                                                                if (extra === STAT_MARKER || extra === STAT_RST || extra === null) { markerFound = true; break; }
                                                                 eob_run = (1 << r) + extra - 1;
                                                                 break;
                                                             } else { k += 15; }
                                                         } else {
                                                             k += r;
                                                             let val = rv(s);
+                                                            if (val === null) { markerFound = true; break; }
                                                             if (k <= Se) coeffBuffer[blockOffset + ZZ[k]] = val << Al;
                                                         }
                                                         k++;
