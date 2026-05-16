@@ -242,7 +242,7 @@ const JpegCORE = {
 
     // --- 3. DECODER (v1.6.6 - FIXED PROGRESSIVE) ---
     Decoder: {
-        IDCT: class {
+IDCT: class {
             constructor() {
                 this.bases = {};
                 [1, 2, 4, 8].forEach(size => {
@@ -261,14 +261,20 @@ const JpegCORE = {
                 const base = this.bases[outSize];
                 const out = new Float32Array(outSize * outSize);
                 const normFactor = 2 / outSize;
+
+                // Optimization: Pre-calculate de-quantized coefficients
+                // to avoid doing it inside the nested loop
+                const dqCoeffs = new Float32Array(64);
+                for(let i=0; i<64; i++) dqCoeffs[i] = coeffs[i] * quantTable[i];
+
                 for (let y = 0; y < outSize; y++) {
                     for (let x = 0; x < outSize; x++) {
                         let sum = 0;
                         for (let u = 0; u < outSize; u++) {
                             for (let v = 0; v < outSize; v++) {
-                                // De-quantize and Transform
-                                const coefVal = coeffs[u * 8 + v] * quantTable[u * 8 + v];
-                                sum += coefVal * base[u][x] * base[v][y];
+                                // FIXED: Matches u(RowFreq) with y(RowPos) and v(ColFreq) with x(ColPos)
+                                // Old Broken Code: base[u][x] * base[v][y]
+                                sum += dqCoeffs[u * 8 + v] * base[u][y] * base[v][x];
                             }
                         }
                         out[y * outSize + x] = sum * normFactor;
