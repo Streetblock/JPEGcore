@@ -1,9 +1,9 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.7.7 (better Encoder)
+* Extended Version 1.7.8  ( Forgiving DECODER / Robust Mode)
 * * CORES:
-* - Decoder: Fixed IDCT amplitude/saturation bug (v1.7.5)
-* - Encoder: ZigZag order fix for saving (v1.7.4)
+* - Decoder: Fixed IDCT amplitude/saturation bug (v1.7.5), Robust Mode(v1.7.8)
+* - Encoder: ZigZag order fix for saving (v1.7.4), enfoceNewQuality (1.7.7)
 * * * Features  1.7.6:
 * - NEW: Quantization Crush (Deep Fry effect)
 * - NEW: Chromatic Aberration (Channel shifting)
@@ -224,7 +224,7 @@ const JpegCORE = {
         }
     },
 
-    // --- 3. DECODER (v1.7.5 - FIXED Scaling Colors) ---
+    // --- 3. DECODER (v1.7.8 - Forgiving / Robust Mode) ---
     Decoder: {
         IDCT: class {
             constructor() {
@@ -241,19 +241,20 @@ const JpegCORE = {
                 });
             }
             transform(coeffs, quantTable, outSize = 8) {
-                if (!this.bases[outSize]) throw new Error("Invalid IDCT scale");
+                // Falls durch Glitch QuantTable fehlt, Fallback auf Standard nutzen um Crash zu vermeiden
+                if (!quantTable) return new Float32Array(outSize * outSize);
+
+                if (!this.bases[outSize]) return new Float32Array(outSize * outSize);
                 const base = this.bases[outSize];
                 const out = new Float32Array(outSize * outSize);
-
-                // --- FIX: Normalize based on ORIGINAL size (8), not Target size ---
-                // Original coefficients carry energy for 8x8 pixels.
-                // When reducing to 4x4 (scale 0.5), we must scale down amplitude by 0.5 (or divide by 2)
-                // When reducing to 2x2 (scale 0.25), scale down by 0.25, etc.
-                // Standard formula uses (2/outSize). We want fixed (2/8) = 0.25.
-                const normFactor = 0.25;
+                const normFactor = 0.25; // Fixed scaling for 8x8 source
 
                 const dqCoeffs = new Float32Array(64);
-                for(let i=0; i<64; i++) dqCoeffs[i] = coeffs[i] * quantTable[i];
+                for(let i=0; i<64; i++) {
+                    // Safe access falls QuantTable zu kurz ist
+                    let q = quantTable[i] || 1;
+                    dqCoeffs[i] = coeffs[i] * q;
+                }
 
                 for (let y = 0; y < outSize; y++) {
                     for (let x = 0; x < outSize; x++) {
@@ -271,295 +272,357 @@ const JpegCORE = {
         },
 
         extractBlocks: async function(file) {
-            const buf = await file.arrayBuffer();
-            const d = new Uint8Array(buf);
-            const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG, SM = JpegCORE.Constants.SAMPLE_MODES;
-            const H = JpegCORE.Constants.HUFFMAN;
-            let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
+            try {
+                const buf = await file.arrayBuffer();
+                const d = new Uint8Array(buf);
+                const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG, SM = JpegCORE.Constants.SAMPLE_MODES;
+                const H = JpegCORE.Constants.HUFFMAN;
 
-            const mh = (L, V) => {
-                let t = {}, c = 0, p = 0;
-                for (let i = 1; i <= 16; i++) {
-                    for (let j = 0; j < L[i - 1]; j++) {
-                        let k = "";
-                        for (let x = i - 1; x >= 0; x--) k += (c >> x) & 1;
-                        t[k] = V[p++];
-                        c++;
+                // --- Robustheit 1: Header Check lockern ---
+                // Wir prüfen zwar, aber werfen nicht sofort, wenn wir später vielleicht noch Daten finden
+                if (d.length < 2) throw new Error("File too short");
+
+                let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
+
+                const mh = (L, V) => {
+                    let t = {}, c = 0, p = 0;
+                    for (let i = 1; i <= 16; i++) {
+                        for (let j = 0; j < L[i - 1]; j++) {
+                            let k = "";
+                            for (let x = i - 1; x >= 0; x--) k += (c >> x) & 1;
+                            if(p < V.length) t[k] = V[p++]; // Safe Check
+                            c++;
+                        }
+                        c <<= 1;
                     }
-                    c <<= 1;
-                }
-                return t;
-            };
+                    return t;
+                };
 
-            let tables = {
-                0: { 0: mh(H.DC_L_NR, H.DC_L_VAL), 1: mh(H.DC_C_NR, H.DC_C_VAL) },
-                1: { 0: mh(H.AC_L_NR, H.AC_L_VAL), 1: mh(H.AC_C_NR, H.AC_C_VAL) }
-            };
-            const quantTables = {};
+                let tables = {
+                    0: { 0: mh(H.DC_L_NR, H.DC_L_VAL), 1: mh(H.DC_C_NR, H.DC_C_VAL) },
+                    1: { 0: mh(H.AC_L_NR, H.AC_L_VAL), 1: mh(H.AC_C_NR, H.AC_C_VAL) }
+                };
+                const quantTables = {};
 
-            if (d[0] !== 0xFF || d[1] !== M.SOI) throw new Error("Not a JPEG");
-            pos = 2;
+                // Suche nach SOI
+                if (d[0] === 0xFF && d[1] === M.SOI) pos = 2;
 
-            while (pos < d.length - 1) {
-                if (d[pos] !== 0xFF) { pos++; continue; }
-                while (d[pos] === 0xFF && pos < d.length) pos++;
-                if (pos >= d.length) break;
-                const marker = d[pos];
-                if (marker === M.SOS) break;
-                const len = (d[pos + 1] << 8) | d[pos + 2];
-                const segmentEnd = pos + 1 + len;
+                // --- Robustheit 2: Header Parsing Loop (Abgesichert) ---
+                while (pos < d.length - 1) {
+                    if (d[pos] !== 0xFF) { pos++; continue; }
+                    while (d[pos] === 0xFF && pos < d.length) pos++;
+                    if (pos >= d.length) break;
+                    const marker = d[pos];
 
-                if (marker === M.SOF0 || marker === M.SOF2) {
-                    h = (d[pos + 4] << 8) | d[pos + 5];
-                    w = (d[pos + 6] << 8) | d[pos + 7];
-                    const numComps = d[pos + 8];
-                    compMapList = [];
-                    for (let i = 0; i < numComps; i++) {
-                         compMapList.push({
-                            id: d[pos + 9 + (i * 3)],
-                            type: (i === 0) ? 0 : (i === 1 ? 1 : 2),
-                            samp: d[pos + 10 + (i * 3)],
-                            tq: d[pos + 11 + (i * 3)]
-                         });
-                    }
-                    if (numComps === 1) { finalMode = 'GRAY'; mcuStructure = SM['GRAY']; }
-                    else {
-                        const ySamp = compMapList[0].samp;
-                        mcuStructure = (ySamp === 0x22 ? SM['420'] : (ySamp === 0x21 ? SM['422'] : (ySamp === 0x11 ? SM['444'] : SM['420'])));
-                        finalMode = (ySamp === 0x22 ? '420' : (ySamp === 0x21 ? '422' : (ySamp === 0x11 ? '444' : '420')));
-                    }
-                } else if (marker === M.DHT) {
-                    let subPos = pos + 3;
-                    while (subPos < segmentEnd) {
-                        const info = d[subPos++];
-                        const tc = (info >> 4) & 0x0F, th = info & 0x0F;
-                        const nr = Array.from(d.slice(subPos, subPos + 16)); subPos += 16;
-                        let count = 0; for (let c of nr) count += c;
-                        const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
-                        if (!tables[tc]) tables[tc] = {};
-                        tables[tc][th] = mh(nr, val);
-                    }
-                } else if (marker === M.DQT) {
-                    let subPos = pos + 3;
-                    while (subPos < segmentEnd) {
-                        const info = d[subPos++];
-                        const id = info & 0x0F;
-                        const naturalTbl = new Uint8Array(64);
-                        for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++];
-                        quantTables[id] = naturalTbl;
-                    }
-                }
-                pos = segmentEnd;
-            }
+                    if (marker === M.SOS) break; // Scan start found!
 
-            if (!mcuStructure) throw new Error("Structure detection failed");
-
-            const blocksPerMCU = mcuStructure.blocks.length;
-            const cols = Math.ceil(w / (mcuStructure.hMax * 8));
-            const rows = Math.ceil(h / (mcuStructure.vMax * 8));
-            const totalBlocks = cols * rows * blocksPerMCU;
-            const coeffBuffer = new Int32Array(totalBlocks * 64);
-
-            let bp = pos;
-            let bb = 0;
-            let bc = 0;
-
-            const nb = () => {
-                if (bc === 0) {
-                    if (bp >= d.length) return null;
-                    let b = d[bp++];
-                    if (b === 0xFF) {
-                        if (bp >= d.length) return null;
-                        let next = d[bp];
-                        if (next === 0) { bp++; }
-                        else if (next >= 0xD0 && next <= 0xD7) { bp++; return 'RST'; }
-                        else if (next === M.EOI) { return null; }
-                        else { return 'MARKER'; }
-                    }
-                    bb = b; bc = 8;
-                }
-                const bit = (bb >> (bc - 1)) & 1;
-                bc--;
-                return bit;
-            };
-
-            const rh = (m) => {
-                let k = "";
-                while (k.length < 16) {
-                    const b = nb();
-                    if (b === 'MARKER' || b === 'RST' || b === null) return b;
-                    k += b;
-                    if (m[k] !== undefined) return m[k];
-                }
-                return null;
-            };
-
-            const rv = (l) => {
-                let v = 0;
-                for (let i = 0; i < l; i++) {
-                    const b = nb();
-                    if (b === 'MARKER' || b === 'RST' || b === null) return null;
-                    v = (v << 1) | b;
-                }
-                return v < (1 << (l - 1)) ? v + (-1 << l) + 1 : v;
-            };
-
-            if (d[pos] !== 0xFF && d[pos-1] === 0xFF) pos--;
-
-            let scanCount = 0;
-            let predDC = [0, 0, 0];
-
-            while (pos < d.length - 1) {
-                if (d[pos] !== 0xFF) { pos++; continue; }
-                while(d[pos] === 0xFF && pos < d.length) pos++;
-                if (pos >= d.length) break;
-                const marker = d[pos];
-
-                if (marker === M.SOS) {
-                    scanCount++;
+                    // Längen-Check: Verhindert Absturz wenn Datei mitten im Header endet
+                    if (pos + 2 >= d.length) break;
                     const len = (d[pos + 1] << 8) | d[pos + 2];
-                    const sosEnd = pos + 1 + len;
-                    const ns = d[pos + 3];
-                    const comps = [];
-                    for (let i = 0; i < ns; i++) {
-                        const cs = d[pos + 4 + i * 2];
-                        const tdta = d[pos + 5 + i * 2];
-                        const mapObj = compMapList.find(x => x.id === cs);
-                        if (mapObj) comps.push({ type: mapObj.type, dcTbl: (tdta >> 4) & 0xF, acTbl: tdta & 0xF });
+                    const segmentEnd = pos + 1 + len;
+                    if (segmentEnd > d.length) break; // Segment kaputt, Abbruch Header-Parsing
+
+                    if (marker === M.SOF0 || marker === M.SOF2) {
+                        h = (d[pos + 4] << 8) | d[pos + 5];
+                        w = (d[pos + 6] << 8) | d[pos + 7];
+                        const numComps = d[pos + 8];
+                        compMapList = [];
+                        for (let i = 0; i < numComps; i++) {
+                            compMapList.push({
+                                id: d[pos + 9 + (i * 3)],
+                                type: (i === 0) ? 0 : (i === 1 ? 1 : 2),
+                                samp: d[pos + 10 + (i * 3)],
+                                tq: d[pos + 11 + (i * 3)]
+                            });
+                        }
+                        if (numComps === 1) { finalMode = 'GRAY'; mcuStructure = SM['GRAY']; }
+                        else {
+                            const ySamp = compMapList[0].samp;
+                            mcuStructure = (ySamp === 0x22 ? SM['420'] : (ySamp === 0x21 ? SM['422'] : (ySamp === 0x11 ? SM['444'] : SM['420'])));
+                            finalMode = (ySamp === 0x22 ? '420' : (ySamp === 0x21 ? '422' : (ySamp === 0x11 ? '444' : '420')));
+                        }
+                    } else if (marker === M.DHT) {
+                        let subPos = pos + 3;
+                        while (subPos < segmentEnd) {
+                            const info = d[subPos++];
+                            const tc = (info >> 4) & 0x0F, th = info & 0x0F;
+                            const nr = Array.from(d.slice(subPos, subPos + 16)); subPos += 16;
+                            let count = 0; for (let c of nr) count += c;
+                            const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
+                            if (!tables[tc]) tables[tc] = {};
+                            tables[tc][th] = mh(nr, val);
+                        }
+                    } else if (marker === M.DQT) {
+                        let subPos = pos + 3;
+                        while (subPos < segmentEnd) {
+                            const info = d[subPos++];
+                            const id = info & 0x0F;
+                            const naturalTbl = new Uint8Array(64);
+                            for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10; // Fallback value
+                            quantTables[id] = naturalTbl;
+                        }
                     }
-                    const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
-                    const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
+                    pos = segmentEnd;
+                }
 
-                    bp = sosEnd; bb = 0; bc = 0;
-                    let eob_run = 0;
-                    if (Ss === 0) predDC = [0,0,0];
+                // --- Fallback für Dimensionen ---
+                // Wenn SOF gefehlt hat (sehr kaputt), raten wir oder geben auf
+                if (!w || !h) {
+                    console.warn("Forgiving Decoder: No dimensions found. Assuming corrupted header.");
+                    // Wenn wir gar keine Dimensionen haben, können wir nichts rendern.
+                    // Rückgabe eines leeren Dummys, um Crash zu verhindern.
+                    return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
+                }
 
-                    const typeToIndices = {};
-                    for (let b = 0; b < blocksPerMCU; b++) {
-                        const def = mcuStructure.blocks[b], t = (def.t === 'C') ? (def.c === 0 ? 1 : 2) : 0;
-                        if (!typeToIndices[t]) typeToIndices[t] = [];
-                        typeToIndices[t].push(b);
+                if (!mcuStructure) mcuStructure = SM['420']; // Fallback
+
+                const blocksPerMCU = mcuStructure.blocks.length;
+                const cols = Math.ceil(w / (mcuStructure.hMax * 8));
+                const rows = Math.ceil(h / (mcuStructure.vMax * 8));
+                const totalBlocks = cols * rows * blocksPerMCU;
+
+                // Wir initialisieren den Puffer mit 0. Blöcke, die durch Glitch nicht erreicht werden, bleiben grau/leer.
+                const coeffBuffer = new Int32Array(totalBlocks * 64);
+
+                let bp = pos;
+                let bb = 0;
+                let bc = 0;
+
+                const nb = () => {
+                    if (bc === 0) {
+                        if (bp >= d.length) return null; // EOF graceful handling
+                        let b = d[bp++];
+                        if (b === 0xFF) {
+                            if (bp >= d.length) return null;
+                            let next = d[bp];
+                            if (next === 0) { bp++; }
+                            else if (next >= 0xD0 && next <= 0xD7) { bp++; return 'RST'; }
+                            else if (next === M.EOI) { return null; }
+                            else { return 'MARKER'; }
+                        }
+                        bb = b; bc = 8;
                     }
+                    const bit = (bb >> (bc - 1)) & 1;
+                    bc--;
+                    return bit;
+                };
 
-                    let markerFound = false;
-                    for (let m = 0; m < cols * rows; m++) {
-                        for (let c of comps) {
-                            const blkIndices = typeToIndices[c.type]; if (!blkIndices) continue;
-                            for (let bIdx of blkIndices) {
-                                const blockOffset = (m * blocksPerMCU + bIdx) * 64;
+                const rh = (m) => {
+                    let k = "";
+                    let safety = 0;
+                    while (k.length < 16 && safety++ < 32) { // Infinite Loop Protection
+                        const b = nb();
+                        if (b === 'MARKER' || b === 'RST' || b === null) return b;
+                        k += b;
+                        if (m[k] !== undefined) return m[k];
+                    }
+                    return null; // Huffman Code not found (Glitch)
+                };
 
-                                if (Ss === 0) { // DC
-                                    if (Ah === 0) {
-                                        const tbl = tables[0][c.dcTbl];
-                                        let s = rh(tbl);
-                                        if (s === 'RST') { predDC[c.type] = 0; bc = 0; eob_run = 0; s = rh(tbl); }
-                                        if (s === 'MARKER' || s === null) { markerFound = true; break; }
-                                        let diff = 0; if (s !== 0) diff = rv(s);
-                                        predDC[c.type] += diff;
-                                        coeffBuffer[blockOffset] = predDC[c.type] << Al;
-                                    } else {
-                                        let bit = nb();
-                                        if (bit === 'MARKER') { markerFound = true; break; }
-                                        if (bit === 1) {
-                                            if (coeffBuffer[blockOffset] >= 0) coeffBuffer[blockOffset] += (1 << Al);
-                                            else coeffBuffer[blockOffset] -= (1 << Al);
-                                        }
-                                    }
-                                }
+                const rv = (l) => {
+                    let v = 0;
+                    for (let i = 0; i < l; i++) {
+                        const b = nb();
+                        if (b === 'MARKER' || b === 'RST' || b === null) return null;
+                        v = (v << 1) | b;
+                    }
+                    return v < (1 << (l - 1)) ? v + (-1 << l) + 1 : v;
+                };
 
-                                if (Se > 0) { // AC
-                                    if (eob_run > 0) {
-                                        eob_run--;
-                                        if (Ah > 0) this._refineAC(coeffBuffer, blockOffset, ZZ, Ss, Se, Al, nb);
-                                    } else {
-                                        const tbl = tables[1][c.acTbl];
-                                        let k = Math.max(Ss, 1);
-                                        while (k <= Se) {
-                                            let s = rh(tbl);
-                                            if (s === 'RST') { bc=0; s = rh(tbl); }
-                                            if (s === 'MARKER' || s === null) { markerFound = true; break; }
+                if (pos < d.length && d[pos] !== 0xFF && d[pos-1] === 0xFF) pos--;
 
-                                            const r = s >> 4, v = s & 15;
-                                            if (v === 0) {
-                                                if (r < 15) { // EOB
-                                                    eob_run = (1 << r) + rv(r);
-                                                    eob_run--;
-                                                    if (Ah > 0) this._refineAC(coeffBuffer, blockOffset, ZZ, k, Se, Al, nb);
-                                                    break;
-                                                } else { // ZRL
-                                                    if (Ah === 0) k += 15;
-                                                    else {
-                                                        let z = 0;
-                                                        while(z < 16 && k <= Se) {
-                                                            if (coeffBuffer[blockOffset + ZZ[k]] !== 0) {
-                                                                let b = nb();
-                                                                if(b===1) {
-                                                                    if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al);
-                                                                    else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al);
-                                                                }
-                                                            } else z++;
-                                                            k++;
-                                                        }
-                                                        k--;
-                                                    }
-                                                }
+                let predDC = [0, 0, 0];
+
+                // --- Robustheit 3: Scan Loop in Try/Catch ---
+                // Hier passiert der Großteil der Magie. Wenn der Stream korrupt ist,
+                // fangen wir den Fehler, brechen ab, aber liefern coeffBuffer zurück.
+                try {
+                    while (pos < d.length - 1) {
+                        if (d[pos] !== 0xFF) { pos++; continue; }
+                        while(d[pos] === 0xFF && pos < d.length) pos++;
+                        if (pos >= d.length) break;
+                        const marker = d[pos];
+
+                        if (marker === M.SOS) {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            const sosEnd = pos + 1 + len;
+                            if (sosEnd > d.length) break; // SOS header broken
+
+                            const ns = d[pos + 3];
+                            const comps = [];
+                            for (let i = 0; i < ns; i++) {
+                                const cs = d[pos + 4 + i * 2];
+                                const tdta = d[pos + 5 + i * 2];
+                                const mapObj = compMapList.find(x => x.id === cs);
+                                if (mapObj) comps.push({ type: mapObj.type, dcTbl: (tdta >> 4) & 0xF, acTbl: tdta & 0xF });
+                            }
+
+                            // Fallback falls comps leer sind (Glitch)
+                            if (comps.length === 0) comps.push({type:0, dcTbl:0, acTbl:0});
+
+                            const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
+                            const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
+
+                            bp = sosEnd; bb = 0; bc = 0;
+                            let eob_run = 0;
+                            if (Ss === 0) predDC = [0,0,0];
+
+                            const typeToIndices = {};
+                            for (let b = 0; b < blocksPerMCU; b++) {
+                                const def = mcuStructure.blocks[b], t = (def.t === 'C') ? (def.c === 0 ? 1 : 2) : 0;
+                                if (!typeToIndices[t]) typeToIndices[t] = [];
+                                typeToIndices[t].push(b);
+                            }
+
+                            let markerFound = false;
+
+                            // Haupt-Pixel-Schleife
+                            for (let m = 0; m < cols * rows; m++) {
+                                for (let c of comps) {
+                                    const blkIndices = typeToIndices[c.type];
+                                    if (!blkIndices) continue;
+
+                                    for (let bIdx of blkIndices) {
+                                        const blockOffset = (m * blocksPerMCU + bIdx) * 64;
+                                        // Bounds Check: Verhindert Array Overflow bei korrupten Dimensionen
+                                        if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
+
+                                        if (Ss === 0) { // DC
+                                            // Fallback table: Wenn Table ID falsch ist, nimm 0
+                                            const tbl = (tables[0][c.dcTbl]) ? tables[0][c.dcTbl] : tables[0][0];
+                                            if (!tbl) { markerFound = true; break; } // Kritischer Glitch
+
+                                            if (Ah === 0) {
+                                                let s = rh(tbl);
+                                                if (s === 'RST') { predDC[c.type] = 0; bc = 0; eob_run = 0; s = rh(tbl); }
+                                                if (s === 'MARKER' || s === null) { markerFound = true; break; }
+                                                let diff = 0; if (s !== 0) diff = rv(s);
+                                                if (diff === null) { markerFound = true; break; }
+                                                predDC[c.type] += diff;
+                                                coeffBuffer[blockOffset] = predDC[c.type] << Al;
                                             } else {
-                                                if (Ah === 0) {
-                                                    k += r;
-                                                    const val = rv(v);
-                                                    coeffBuffer[blockOffset + ZZ[k]] = val << Al;
-                                                } else {
-                                                    let z = 0;
-                                                    while(z < r && k <= Se) {
-                                                        if (coeffBuffer[blockOffset + ZZ[k]] !== 0) {
-                                                            let b = nb();
-                                                            if(b===1) {
-                                                                if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al);
-                                                                else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al);
-                                                            }
-                                                        } else z++;
-                                                        k++;
-                                                    }
-                                                    const val = rv(v);
-                                                    const idx = blockOffset + ZZ[k];
-                                                    coeffBuffer[idx] = (val < 0 ? -1 : 1) * (1 << Al);
+                                                let bit = nb();
+                                                if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
+                                                if (bit === 1) {
+                                                    if (coeffBuffer[blockOffset] >= 0) coeffBuffer[blockOffset] += (1 << Al);
+                                                    else coeffBuffer[blockOffset] -= (1 << Al);
                                                 }
                                             }
-                                            k++;
                                         }
+
+                                        if (Se > 0) { // AC
+                                            const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
+                                            if (!tbl) { markerFound = true; break; }
+
+                                            if (eob_run > 0) {
+                                                eob_run--;
+                                                if (Ah > 0) this._refineAC(coeffBuffer, blockOffset, ZZ, Ss, Se, Al, nb);
+                                            } else {
+                                                let k = Math.max(Ss, 1);
+                                                while (k <= Se) {
+                                                    let s = rh(tbl);
+                                                    if (s === 'RST') { bc=0; s = rh(tbl); }
+                                                    if (s === 'MARKER' || s === null) { markerFound = true; break; }
+
+                                                    const r = s >> 4, v = s & 15;
+                                                    if (v === 0) {
+                                                        if (r < 15) { // EOB
+                                                            eob_run = (1 << r) + rv(r);
+                                                            if (eob_run === null) { eob_run=0; markerFound=true; break; }
+                                                            eob_run--;
+                                                            if (Ah > 0) this._refineAC(coeffBuffer, blockOffset, ZZ, k, Se, Al, nb);
+                                                            break;
+                                                        } else { // ZRL
+                                                            if (Ah === 0) k += 15;
+                                                            else {
+                                                                let z = 0;
+                                                                while(z < 16 && k <= Se) {
+                                                                    if (coeffBuffer[blockOffset + ZZ[k]] !== 0) {
+                                                                        let b = nb();
+                                                                        if (b === 'MARKER' || b === null) { markerFound = true; break; }
+                                                                        if(b===1) {
+                                                                            if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al);
+                                                                            else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al);
+                                                                        }
+                                                                    } else z++;
+                                                                    k++;
+                                                                }
+                                                                k--;
+                                                            }
+                                                        }
+                                                    } else {
+                                                        if (Ah === 0) {
+                                                            k += r;
+                                                            const val = rv(v);
+                                                            if (val === null) { markerFound = true; break; }
+                                                            if (k <= Se) coeffBuffer[blockOffset + ZZ[k]] = val << Al;
+                                                        } else {
+                                                            let z = 0;
+                                                            while(z < r && k <= Se) {
+                                                                if (coeffBuffer[blockOffset + ZZ[k]] !== 0) {
+                                                                    let b = nb();
+                                                                    if(b===1) {
+                                                                        if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al);
+                                                                        else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al);
+                                                                    }
+                                                                } else z++;
+                                                                k++;
+                                                            }
+                                                            const val = rv(v);
+                                                            if (val === null) { markerFound = true; break; }
+                                                            const idx = blockOffset + ZZ[k];
+                                                            if (k <= Se) coeffBuffer[idx] = (val < 0 ? -1 : 1) * (1 << Al);
+                                                        }
+                                                    }
+                                                    k++;
+                                                }
+                                            }
+                                        }
+                                        if (markerFound) break;
                                     }
+                                    if (markerFound) break;
                                 }
                                 if (markerFound) break;
                             }
-                            if (markerFound) break;
+                            if (markerFound) pos = bp - 1; else pos = bp;
+
+                        } else if (marker === M.DHT) {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            if (pos + 1 + len > d.length) break; // DHT length error
+                            let subPos = pos + 3, end = pos + 1 + len;
+                            while (subPos < end) {
+                                const info = d[subPos++];
+                                const tc = (info >> 4) & 0x0F, th = info & 0x0F;
+                                const nr = Array.from(d.slice(subPos, subPos + 16)); subPos += 16;
+                                let count = 0; for (let c of nr) count += c;
+                                const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
+                                if (!tables[tc]) tables[tc] = {};
+                                tables[tc][th] = mh(nr, val);
+                            }
+                            pos = end;
+                        } else if (marker === M.EOI) { break; }
+                        else {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            pos += 1 + len;
                         }
-                        if (markerFound) break;
                     }
-                    if (markerFound) pos = bp - 1; else pos = bp;
+                } catch (e) {
+                    console.warn("Forgiving Decoder caught error (rendering partial):", e);
+                }
 
-                } else if (marker === M.DHT) {
-                    const len = (d[pos + 1] << 8) | d[pos + 2];
-                    let subPos = pos + 3, end = pos + 1 + len;
-                    while (subPos < end) {
-                        const info = d[subPos++];
-                        const tc = (info >> 4) & 0x0F, th = info & 0x0F;
-                        const nr = Array.from(d.slice(subPos, subPos + 16)); subPos += 16;
-                        let count = 0; for (let c of nr) count += c;
-                        const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
-                        if (!tables[tc]) tables[tc] = {};
-                        tables[tc][th] = mh(nr, val);
-                    }
-                    pos = end;
-                } else if (marker === M.EOI) { break; }
-                else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
-            }
+                // Daten zusammenpacken, auch wenn es weniger sind als totalBlocks
+                const allBlocks = [];
+                for (let i = 0; i < totalBlocks; i++) {
+                    const off = i * 64, bTypeIndex = i % blocksPerMCU, bDef = mcuStructure.blocks[bTypeIndex], isChroma = bDef.t === 'C';
+                    allBlocks.push({ data: coeffBuffer.slice(off, off + 64), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
+                }
 
-            const allBlocks = [];
-            for (let i = 0; i < totalBlocks; i++) {
-                const off = i * 64, bTypeIndex = i % blocksPerMCU, bDef = mcuStructure.blocks[bTypeIndex], isChroma = bDef.t === 'C';
-                allBlocks.push({ data: coeffBuffer.slice(off, off + 64), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
+                return { blocks: allBlocks, w, h, mode: finalMode, quantTables: quantTables, compMap: compMapList };
+
+            } catch (globalErr) {
+                console.error("Critical Decoder Failure:", globalErr);
+                return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
             }
-            return { blocks: allBlocks, w, h, mode: finalMode, quantTables: quantTables, compMap: compMapList };
         },
 
         _refineAC: function(coeffBuffer, blockOffset, ZZ, k, Se, Al, nb) {
@@ -576,18 +639,24 @@ const JpegCORE = {
         },
 
         render: function(decoded, scale = 1.0) {
+            if (!decoded || !decoded.blocks || decoded.blocks.length === 0) return new ImageData(1, 1); // Safety return
+
             let blockSize = 8;
             if (scale === 0.5) blockSize = 4; else if (scale === 0.25) blockSize = 2; else if (scale === 0.125) blockSize = 1;
 
             const w = Math.ceil(decoded.w * scale), h = Math.ceil(decoded.h * scale);
-            const mode = decoded.mode, blocks = decoded.blocks;
+            const mode = decoded.mode || '420', blocks = decoded.blocks;
+            // Falls Dimensionen durch Glitch riesig sind, begrenzen (Browser Crash Schutz)
+            if (w > 16000 || h > 16000) throw new Error("Image too large (Glitch detected)");
+
             const finalData = new Uint8ClampedArray(w * h * 4);
             const idctEngine = new JpegCORE.Decoder.IDCT();
-            const SM = JpegCORE.Constants.SAMPLE_MODES[mode];
+            const SM = JpegCORE.Constants.SAMPLE_MODES[mode] || JpegCORE.Constants.SAMPLE_MODES['420'];
             const ZZ = JpegCORE.Constants.ZIG_ZAG;
 
             const ensureNatural = (zzTbl) => {
                 const n = new Uint8Array(64);
+                if (!zzTbl) return n; // Safety
                 for (let i = 0; i < 64; i++) n[ZZ[i]] = zzTbl[i];
                 return n;
             };
@@ -595,7 +664,7 @@ const JpegCORE = {
             const defaultQ = { 0: ensureNatural(JpegCORE.Constants.QUANT_L), 1: ensureNatural(JpegCORE.Constants.QUANT_C) };
             const compToQT = {};
 
-            if (decoded.compMap) {
+            if (decoded.compMap && decoded.compMap.length > 0) {
                 decoded.compMap.forEach(c => {
                     const t = decoded.quantTables[c.tq];
                     compToQT[c.type] = t || defaultQ[c.type === 0 ? 0 : 1];
@@ -613,10 +682,20 @@ const JpegCORE = {
                 for (let c = 0; c < cols; c++) {
                     const spatialBlocks = [];
                     for (let b = 0; b < blocksPerMCU; b++) {
-                        if (bIdx >= blocks.length) break;
-                        const rawBlock = blocks[bIdx++];
+                        // ROBUSTHEIT: Wenn Blöcke fehlen (EOF), füllen wir mit leeren (grauen) Daten auf
+                        let rawBlock = { data: new Int32Array(64), comp: 0, type: 'Y' };
+                        if (bIdx < blocks.length) {
+                             rawBlock = blocks[bIdx++];
+                        } else {
+                            // Optional: Wiederhole letzten Block für "Smear"-Effekt statt Grau
+                             // rawBlock = blocks[blocks.length-1];
+                        }
+
+                        // Safety Check für type
+                        if (!rawBlock.type) rawBlock.type = SM.blocks[b].t;
+
                         spatialBlocks.push({
-                            pixels: idctEngine.transform(rawBlock.data, compToQT[rawBlock.comp], blockSize),
+                            pixels: idctEngine.transform(rawBlock.data, compToQT[rawBlock.comp] || defaultQ[0], blockSize),
                             def: SM.blocks[b]
                         });
                     }
