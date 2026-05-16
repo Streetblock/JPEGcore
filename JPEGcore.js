@@ -1,21 +1,20 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.7.3 (Fix: Save Preservation)
+* Extended Version 1.7.5 (Fix: IDCT Scaling Normalization)
 * * CORES:
-* - Decoder/Encoder/Transformer: Based on v1.6.6 (Fixed Progressive Scan)
-* - Analysis: Based on v1.6.5 (Restored parseStructure & detailed probe)
+* - Decoder: Fixed IDCT amplitude/saturation bug during downscaling
+* - Encoder: Uses Natural order internally, ZigZag for file writing (v1.7.4 fix included)
+* - Analysis: Header parsing & Table extraction
 * * * Features:
 * - Encode (RGB -> JPEG)
 * - Decode (JPEG -> RGB via render) including FIXED Progressive Scan support
-* - Scale-on-Load Decode (Fast thumbnails 1/2, 1/4, 1/8 size)
+* - Scale-on-Load Decode (Fast thumbnails 1/2, 1/4, 1/8 size with correct colors)
 * - Lossless Transforms (Rotate, Flip without re-compression)
-* - Glitch Art / Filters (Datamoshing, Quantization hacks, Channel Swapping)
-* - EXIF Parsing (Orientation detection)
-* - Detailed Analysis (Header parsing, Table extraction)
+* - Glitch Art / Filters
 */
 
 const JpegCORE = {
-  // --- 1. CONSTANTS (v1.6.6) ---
+  // --- 1. CONSTANTS ---
   Constants: {
       MARKERS: {
           SOI: 0xD8, EOI: 0xD9, SOF0: 0xC0, SOF2: 0xC2, DHT: 0xC4,
@@ -42,7 +41,7 @@ const JpegCORE = {
         }
     },
 
-    // --- 2. ANALYSIS (RESTORED FROM v1.6.5) ---
+    // --- 2. ANALYSIS ---
     Analysis: {
         _readExifOrientation: function(seg) {
             if (seg.length < 14) return null;
@@ -228,7 +227,7 @@ const JpegCORE = {
         }
     },
 
-    // --- 3. DECODER (v1.7.2 - FIXED PROGRESSIVE) ---
+    // --- 3. DECODER (v1.7.5 - FIXED Scaling Colors) ---
     Decoder: {
         IDCT: class {
             constructor() {
@@ -248,7 +247,13 @@ const JpegCORE = {
                 if (!this.bases[outSize]) throw new Error("Invalid IDCT scale");
                 const base = this.bases[outSize];
                 const out = new Float32Array(outSize * outSize);
-                const normFactor = 2 / outSize;
+
+                // --- FIX: Normalize based on ORIGINAL size (8), not Target size ---
+                // Original coefficients carry energy for 8x8 pixels.
+                // When reducing to 4x4 (scale 0.5), we must scale down amplitude by 0.5 (or divide by 2)
+                // When reducing to 2x2 (scale 0.25), scale down by 0.25, etc.
+                // Standard formula uses (2/outSize). We want fixed (2/8) = 0.25.
+                const normFactor = 0.25;
 
                 const dqCoeffs = new Float32Array(64);
                 for(let i=0; i<64; i++) dqCoeffs[i] = coeffs[i] * quantTable[i];
@@ -653,7 +658,7 @@ const JpegCORE = {
         }
     },
 
-    // --- 4. TRANSFORMER (v1.6.6) ---
+    // --- 4. TRANSFORMER ---
     Transformer: {
         _transformCoeffs: function(data, op) {
             const out = new Int32Array(64);
@@ -770,7 +775,7 @@ const JpegCORE = {
         }
     },
 
-    // --- 5. GLITCH (v1.6.6) ---
+    // --- 5. GLITCH ---
     Glitch: {
         swapChannels: function(captured) {
             const sm = JpegCORE.Constants.SAMPLE_MODES[captured.mode];
@@ -817,15 +822,26 @@ const JpegCORE = {
         }
     },
 
-    // --- 6. ENCODER (v1.7.3 - Fixed Save Preservation) ---
+    // --- 6. ENCODER ---
     Encoder: class {
         constructor(quality, customL, customC) {
             const C = JpegCORE.Constants;
-            if (customL && customC) { this.tY = customL; this.tC = customC; }
-            else {
+
+            const toNatural = (zz) => {
+                const n = new Uint8Array(64);
+                const Z = C.ZIG_ZAG;
+                for(let i=0; i<64; i++) n[Z[i]] = zz[i];
+                return n;
+            };
+
+            if (customL && customC) {
+                this.tY = customL;
+                this.tC = customC;
+            } else {
                 const s = quality < 50 ? 5000 / quality : 200 - quality * 2;
                 const scale = (tbl) => tbl.map(v => Math.floor((v * s + 50) / 100) || 1);
-                this.tY = scale(C.QUANT_L); this.tC = scale(C.QUANT_C);
+                this.tY = toNatural(scale(C.QUANT_L));
+                this.tC = toNatural(scale(C.QUANT_C));
             }
             const H = C.HUFFMAN;
             this.computeHuffmanTbl(H.DC_L_NR, H.DC_L_VAL, H.AC_L_NR, H.AC_L_VAL, H.DC_C_NR, H.DC_C_VAL, H.AC_C_NR, H.AC_C_VAL);
@@ -893,12 +909,18 @@ const JpegCORE = {
             const isGray = (captured.mode === 'GRAY'), numComps = isGray ? 1 : 3;
             const w = captured.w, h = captured.h;
 
-            // --- FIX: Use Original Quantization Tables if available (prevent corruption) ---
             let qY = this.tY, qC = this.tC;
             if (captured.quantTables) {
                 if(captured.quantTables[0]) qY = captured.quantTables[0];
                 if(captured.quantTables[1]) qC = captured.quantTables[1];
             }
+
+            const toZigZag = (n) => {
+                const zz = new Uint8Array(64);
+                const Z = JpegCORE.Constants.ZIG_ZAG;
+                for(let i=0; i<64; i++) zz[i] = n[Z[i]];
+                return zz;
+            };
 
             wr(0xFF00 | M.SOI);
             if (metaSegments && metaSegments.length > 0) {
@@ -907,7 +929,9 @@ const JpegCORE = {
                 wr(0xFF00 | M.APP0); wr(16); [0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0].forEach(wb);
             }
 
-            wr(0xFF00 | M.DQT); wr(132); wb(0); qY.forEach(v => wb(v)); wb(1); qC.forEach(v => wb(v));
+            wr(0xFF00 | M.DQT); wr(132);
+            wb(0); toZigZag(qY).forEach(v => wb(v));
+            wb(1); toZigZag(qC).forEach(v => wb(v));
 
             wr(0xFF00 | M.SOF0); wr(8 + 3 * numComps); wb(8); wr(h); wr(w); wb(numComps); wb(1); wb((sm.hMax << 4) | sm.vMax); wb(0);
             if (!isGray) { wb(2); wb(0x11); wb(1); wb(3); wb(0x11); wb(1); }
