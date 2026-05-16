@@ -12,6 +12,10 @@
 */
 
 const JpegCORE = {
+    Config: {
+        // Temporary switch for progressive decoding while the native path is improved.
+        progressiveFallback: true
+    },
     // --- 1. CONSTANTS ---
     Constants: {
       MARKERS: {
@@ -762,7 +766,7 @@ const JpegCORE = {
                 // Progressive fallback:
                 // Keep baseline on the existing fast path and route only SOF2 to jpeg-js when available.
                 const jpegJsGlobal = (typeof globalThis !== 'undefined') ? globalThis['jpeg-js'] : null;
-                if (isProgressive && jpegJsGlobal && typeof jpegJsGlobal.decode === 'function') {
+                if (JpegCORE.Config.progressiveFallback && isProgressive && jpegJsGlobal && typeof jpegJsGlobal.decode === 'function') {
                     const decoded = jpegJsGlobal.decode(d, { useTArray: true, formatAsRGBA: true });
                     if (decoded && decoded.data && decoded.width && decoded.height) {
                         return {
