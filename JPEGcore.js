@@ -1,4 +1,4 @@
-/**
+﻿/**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
 * Extended Version 1.9.0 Refactor with Utils
 * * CORES:
@@ -46,7 +46,7 @@ const JpegCORE = {
     Utils: {
 
         // --- 1. HUFFMAN TREE GENERATOR ---
-        // Konvertiert die JPEG-Standard-Tabellenform in einen navigierbaren binären Baum.
+        // Konvertiert die JPEG-Standard-Tabellenform in einen navigierbaren binÃ¤ren Baum.
         makeHuffmanTree: function(L, V) {
             const root = [];
             let c = 0, p = 0;
@@ -72,20 +72,20 @@ const JpegCORE = {
         // --- 2. BIT READER KLASSE ---
         /**
          * BitReader - Spezialisierte Klasse zum bitweisen Lesen des JPEG-Datenstroms.
-         * * Diese Klasse ist entscheidend für die Vermeidung des "Grau-Bild-Bugs".
-         * Er entsteht, wenn der Decoder über Marker (wie 0xFF 0xD9) hinausliest
-         * und Müll-Daten als Bildinformationen interpretiert.
+         * * Diese Klasse ist entscheidend fÃ¼r die Vermeidung des "Grau-Bild-Bugs".
+         * Er entsteht, wenn der Decoder Ã¼ber Marker (wie 0xFF 0xD9) hinausliest
+         * und MÃ¼ll-Daten als Bildinformationen interpretiert.
          */
         BitReader: class {
             constructor(data, startPos= 0) {
                 this.d = data;           // Das Uint8Array des gesamten JPEG-Files
                 this._pos = startPos;     // Aktuelle Byte-Position im Array
-                this.bitBuffer = 0;      // Zwischenspeicher für das aktuelle Byte
-                this.bitCount = 0;       // Anzahl der noch verfügbaren Bits im Buffer
+                this.bitBuffer = 0;      // Zwischenspeicher fÃ¼r das aktuelle Byte
+                this.bitCount = 0;       // Anzahl der noch verfÃ¼gbaren Bits im Buffer
 
                 // Status-Codes zur Signalisierung von Stream-Ereignissen
                 this.STAT_MARKER = -1;   // Ein unerwarteter Marker unterbricht den Datenstrom
-                this.STAT_RST = -2;      // Ein Restart-Marker wurde gefunden (für Fehlerkorrektur)
+                this.STAT_RST = -2;      // Ein Restart-Marker wurde gefunden (fÃ¼r Fehlerkorrektur)
             }
 
             // Getter: Liefert die aktuelle Byte-Position
@@ -97,11 +97,11 @@ const JpegCORE = {
             set pos(newPos) {
                 this._pos = newPos;
                 this.bitBuffer = 0; // WICHTIG: Puffer leeren
-                this.bitCount = 0;  // WICHTIG: Bit-Zähler zurücksetzen
+                this.bitCount = 0;  // WICHTIG: Bit-ZÃ¤hler zurÃ¼cksetzen
             }
 
             /**
-             * Holt das nächste Bit. Behandelt das JPEG "Byte-Stuffing".
+             * Holt das nÃ¤chste Bit. Behandelt das JPEG "Byte-Stuffing".
              * JPEG wandelt 0xFF in den Bilddaten zu 0xFF 0x00 um, damit es nicht mit Markern verwechselt wird.
              */
             nextBit() {
@@ -117,7 +117,7 @@ const JpegCORE = {
 
                         if (next === 0) {
                             // 0xFF 0x00: Ein echtes 0xFF-Datenbyte, das "gestopft" wurde.
-                            this._pos++; // Überspringe die 0x00
+                            this._pos++; // Ãœberspringe die 0x00
                         } else if (next >= 0xD0 && next <= 0xD7) {
                             // Restart-Marker (RST0-RST7): Erlaubt Dekodier-Resets.
                             this._pos++;
@@ -134,14 +134,14 @@ const JpegCORE = {
                     this.bitCount = 8;
                 }
 
-                // Extrahiere das höchstwertige Bit (MSB) und schiebe den Puffer weiter
+                // Extrahiere das hÃ¶chstwertige Bit (MSB) und schiebe den Puffer weiter
                 const bit = (this.bitBuffer >> (this.bitCount - 1)) & 1;
                 this.bitCount--;
                 return bit;
             }
 
             /**
-             * Liest eine Sequenz von Bits und gibt sie als Ganzzahl zurück.
+             * Liest eine Sequenz von Bits und gibt sie als Ganzzahl zurÃ¼ck.
              * WICHTIG: Reicht Status-Codes (-1, -2) sofort nach oben durch.
              */
             readRaw(length) {
@@ -176,17 +176,17 @@ const JpegCORE = {
 
             /**
              * Navigiert durch den Huffman-Baum basierend auf dem Bitstream.
-             * Jetzt mit Sicherheits-Stopp bei korrupten Bäumen.
+             * Jetzt mit Sicherheits-Stopp bei korrupten BÃ¤umen.
              */
             readHuffman(node) {
                 let curr = node;
                 let safety = 0;
 
-                while (safety < 32) { // Sicherheitslimit hinzugefügt
+                while (safety < 32) { // Sicherheitslimit hinzugefÃ¼gt
                     safety++;
                     const b = this.nextBit();
 
-                    // Status-Codes (-1, -2) oder Stream-Ende (null) sofort zurückgeben
+                    // Status-Codes (-1, -2) oder Stream-Ende (null) sofort zurÃ¼ckgeben
                     if (b === null || b < 0) return b;
 
                     curr = curr[b];
@@ -195,7 +195,7 @@ const JpegCORE = {
                     if (curr === undefined) return null; // Pfad im Baum existiert nicht
                 }
 
-                return null; // Sicherheits-Stopp: Code zu lang oder Baum zirkulär
+                return null; // Sicherheits-Stopp: Code zu lang oder Baum zirkulÃ¤r
             }
 
             /**
@@ -594,16 +594,16 @@ const JpegCORE = {
 
                 // --- Robust Bit Reader Instanz ---
                 // Wir erstellen den Reader. Er bekommt das Daten-Array 'd'.
-                // WICHTIG: Wir übergeben 'pos' erst dann, wenn der eigentliche Scan beginnt,
-                // oder wir initialisieren ihn hier mit 0 und setzen die Position später.
+                // WICHTIG: Wir Ã¼bergeben 'pos' erst dann, wenn der eigentliche Scan beginnt,
+                // oder wir initialisieren ihn hier mit 0 und setzen die Position spÃ¤ter.
                 const reader = new JpegCORE.Utils.BitReader(d, 0);
 
 
                 // Wir binden 'nb' einfach an die Methode der Klasse.
-                // So muss der restliche Code (rh, rv, readRawBits) noch nicht geändert werden.
+                // So muss der restliche Code (rh, rv, readRawBits) noch nicht geÃ¤ndert werden.
                 const nb = () => reader.nextBit();
 
-                // Die Hilfsfunktionen nutzen nun intern den 'reader' über 'nb'
+                // Die Hilfsfunktionen nutzen nun intern den 'reader' Ã¼ber 'nb'
                 const readRawBits = (l) => reader.readRaw(l);
                 const rh = (node) => reader.readHuffman(node);
                 const rv = (l) => reader.readSigned(l);//*/
@@ -688,6 +688,7 @@ const JpegCORE = {
                 // --- Parser Header ---
                 if (d.length < 2) throw new Error("File too short");
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
+                let isProgressive = false;
                 let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
 
@@ -707,6 +708,7 @@ const JpegCORE = {
                     if (segmentEnd > d.length) break;
 
                     if (marker === M.SOF0 || marker === M.SOF2) {
+                        isProgressive = (marker === M.SOF2);
                         h = (d[pos + 4] << 8) | d[pos + 5];
                         w = (d[pos + 6] << 8) | d[pos + 7];
                         const numComps = d[pos + 8];
@@ -754,9 +756,26 @@ const JpegCORE = {
 
                 if (!w || !h || !mcuStructure) return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
                 if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
-                    throw new Error(`Bildmaße zu groß: ${w}x${h}`);
+                    throw new Error(`BildmaÃŸe zu groÃŸ: ${w}x${h}`);
                 }
-                // --- Setup Buffer ---
+
+                // Progressive fallback:
+                // Keep baseline on the existing fast path and route only SOF2 to jpeg-js when available.
+                const jpegJsGlobal = (typeof globalThis !== 'undefined') ? globalThis['jpeg-js'] : null;
+                if (isProgressive && jpegJsGlobal && typeof jpegJsGlobal.decode === 'function') {
+                    const decoded = jpegJsGlobal.decode(d, { useTArray: true, formatAsRGBA: true });
+                    if (decoded && decoded.data && decoded.width && decoded.height) {
+                        return {
+                            preDecodedData: decoded.data,
+                            w: decoded.width,
+                            h: decoded.height,
+                            mode: 'RGBA_FALLBACK',
+                            quantTables: {},
+                            compMap: [],
+                            isProgressiveFallback: true
+                        };
+                    }
+                }                // --- Setup Buffer ---
                 const blocksPerMCU = mcuStructure.blocks.length;
                 const cols = Math.ceil(w / (mcuStructure.hMax * 8));
                 const rows = Math.ceil(h / (mcuStructure.vMax * 8));
@@ -881,7 +900,7 @@ const JpegCORE = {
                                                 // --- AC SUCCESSIVE (Verfeinerung) ---
                                                 let k = Math.max(Ss, 1);
                                                 if (eob_run > 0) {
-                                                    // Während eines EOB-Runs werden nur existierende Werte verfeinert
+                                                    // WÃ¤hrend eines EOB-Runs werden nur existierende Werte verfeinert
                                                     while (k <= Se) {
                                                         const idx = blockOffset + ZZ[k];
                                                         if (coeffBuffer[idx] !== 0) {
@@ -914,7 +933,7 @@ const JpegCORE = {
                                                             } else { zerosToSkip = 15; }
                                                         }
 
-                                                        // Run/Value Logik: Verfeinere Non-Zeros, springe über r Nullen
+                                                        // Run/Value Logik: Verfeinere Non-Zeros, springe Ã¼ber r Nullen
                                                         while (k <= Se) {
                                                             const idx = blockOffset + ZZ[k];
                                                             if (coeffBuffer[idx] !== 0) {
@@ -943,8 +962,13 @@ const JpegCORE = {
                                 if (markerFound) break;
                             }
 
-                            // FIX: Synchronisiere die Stream-Position für den nächsten Scan
+                            // FIX: Synchronisiere die Stream-Position fÃ¼r den nÃ¤chsten Scan.
+                            // BitReader stoppt bei 0xFF + MarkerByte und lÃ¤sst pos auf MarkerByte.
+                            // Der Segment-Parser unten erwartet dagegen, dass pos auf 0xFF zeigt.
                             pos = reader.pos;
+                            if (pos > 0 && pos < d.length && d[pos] !== 0xFF && d[pos - 1] === 0xFF) {
+                                pos--;
+                            }
 
                         } else if (marker === M.DHT) {
                             const len = (d[pos + 1] << 8) | d[pos + 2];
@@ -973,7 +997,7 @@ const JpegCORE = {
             }
         },//*/
 
-        // Wrapper für Abwärtskompatibilität zu v1.8.0
+        // Wrapper fÃ¼r AbwÃ¤rtskompatibilitÃ¤t zu v1.8.0
         extractBlocks: async function(file) {
             // 1. Die neue, schnelle Funktion aufrufen
             const optimized = await this.extractBlocksStruct(file);
@@ -982,7 +1006,7 @@ const JpegCORE = {
             const legacyBlocks = new Array(optimized.blockList.length);
 
             for (let i = 0; i < optimized.blockList.length; i++) {
-                // Die 64 Koeffizienten für diesen Block ausschneiden
+                // Die 64 Koeffizienten fÃ¼r diesen Block ausschneiden
                 const start = i * 64;
                 const end = start + 64;
                 // .slice() erzeugt eine Kopie, was genau dem Verhalten von 1.8.0 entspricht
@@ -991,7 +1015,7 @@ const JpegCORE = {
                 // Das Metadaten-Objekt holen
                 const meta = optimized.blockList[i];
 
-                // Beides im alten Format zusammenfügen
+                // Beides im alten Format zusammenfÃ¼gen
                 legacyBlocks[i] = {
                     data: blockData,
                     type: meta.type,
@@ -999,7 +1023,7 @@ const JpegCORE = {
                 };
             }
 
-            // 3. Das alte Rückgabe-Objekt zurückgeben
+            // 3. Das alte RÃ¼ckgabe-Objekt zurÃ¼ckgeben
             return {
                 blocks: legacyBlocks,
                 w: optimized.w,
@@ -1014,7 +1038,27 @@ const JpegCORE = {
         render: function(decoded, scale = 1.0) {
             if (!decoded) return new ImageData(1, 1);
 
-            // 1. Daten prüfen
+            if (decoded.preDecodedData && decoded.w && decoded.h) {
+                const srcW = decoded.w, srcH = decoded.h;
+                if (scale === 1.0) return new ImageData(new Uint8ClampedArray(decoded.preDecodedData), srcW, srcH);
+                const w = Math.max(1, Math.ceil(srcW * scale));
+                const h = Math.max(1, Math.ceil(srcH * scale));
+                const out = new Uint8ClampedArray(w * h * 4);
+                for (let y = 0; y < h; y++) {
+                    const sy = Math.min(srcH - 1, Math.floor(y / scale));
+                    for (let x = 0; x < w; x++) {
+                        const sx = Math.min(srcW - 1, Math.floor(x / scale));
+                        const sIdx = (sy * srcW + sx) * 4;
+                        const dIdx = (y * w + x) * 4;
+                        out[dIdx] = decoded.preDecodedData[sIdx];
+                        out[dIdx + 1] = decoded.preDecodedData[sIdx + 1];
+                        out[dIdx + 2] = decoded.preDecodedData[sIdx + 2];
+                        out[dIdx + 3] = decoded.preDecodedData[sIdx + 3];
+                    }
+                }
+                return new ImageData(out, w, h);
+            }
+            // 1. Daten prÃ¼fen
             const blockList = decoded.blockList || decoded.blocks;
             if (!blockList || blockList.length === 0) return new ImageData(1, 1);
 
@@ -1033,7 +1077,7 @@ const JpegCORE = {
             const idct = new JpegCORE.Decoder.IDCT();
 
             // Puffer
-            const mcuPix = new Uint8ClampedArray(64 * 10); // Genug Platz für max 10 Blöcke pro MCU
+            const mcuPix = new Uint8ClampedArray(64 * 10); // Genug Platz fÃ¼r max 10 BlÃ¶cke pro MCU
             const finalData = new Uint8ClampedArray(w * h * 4);
 
             // Quantisierungstabellen Mapping
@@ -1059,7 +1103,7 @@ const JpegCORE = {
                 const rowBase = r * mcuH * w * 4;
 
                 for (let c = 0; c < cols; c++) {
-                    // A. IDCT für diesen MCU Block durchführen
+                    // A. IDCT fÃ¼r diesen MCU Block durchfÃ¼hren
                     for (let b = 0; b < blocksPerMCU; b++) {
                          if (bIdx >= blockList.length) break;
                          const meta = blockList[bIdx];
@@ -1080,7 +1124,7 @@ const JpegCORE = {
                     const maxY = Math.min(mcuH, h - oy);
                     const maxX = Math.min(mcuW, w - ox);
 
-                    // Hier wird entschieden, wie wir die Pixel aus den Blöcken holen
+                    // Hier wird entschieden, wie wir die Pixel aus den BlÃ¶cken holen
                     // basierend auf dem Modus (4:4:4 vs 4:2:2 vs 4:2:0)
 
                     for (let y = 0; y < maxY; y++) {
@@ -1094,7 +1138,7 @@ const JpegCORE = {
                             // --- MODUS LOGIK ---
                             if (mode === '444') {
                                 // 4:4:4 (Kein Subsampling): Y, Cb, Cr sind alle 8x8
-                                // Blöcke: [Y, Cb, Cr]
+                                // BlÃ¶cke: [Y, Cb, Cr]
                                 const pixIdx = y * 8 + x; // Da MCU hier immer 8x8 ist
                                 Y  = mcuPix[pixIdx];      // Block 0
                                 Cb = mcuPix[64 + pixIdx]; // Block 1 (+64)
@@ -1102,7 +1146,7 @@ const JpegCORE = {
 
                             } else if (mode === '422') {
                                 // 4:2:2 (Horizontal Subsampling): MCU 16x8
-                                // Blöcke: [Y0, Y1, Cb, Cr]
+                                // BlÃ¶cke: [Y0, Y1, Cb, Cr]
                                 // Y Logik: Linke 8px -> Block 0, Rechte 8px -> Block 1
                                 const bx = x >> 3; // 0 oder 1
                                 const pixIdxY = y * 8 + (x % 8);
@@ -1116,7 +1160,7 @@ const JpegCORE = {
 
                             } else {
                                 // 4:2:0 (Standard): MCU 16x16
-                                // Blöcke: [Y0, Y1, Y2, Y3, Cb, Cr]
+                                // BlÃ¶cke: [Y0, Y1, Y2, Y3, Cb, Cr]
                                 // Y Logik: 4 Quadranten
                                 const bx = x >> 3; // 0 oder 1
                                 const by = y >> 3; // 0 oder 1
@@ -1518,3 +1562,6 @@ const JpegCORE = {
         wbt(b, l) { for (let i = l - 1; i >= 0; i--) { this.byte = (this.byte << 1) | ((b >> i) & 1); this.cnt++; if (this.cnt === 8) { this.buf.push(this.byte); if (this.byte === 0xFF) this.buf.push(0); this.byte = 0; this.cnt = 0; } } }
     }
 };
+
+
+
