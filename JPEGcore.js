@@ -5,6 +5,7 @@
 * - Encode (RGB -> JPEG)
 * - Decode (JPEG -> RGB via render)
 * - Lossless Transforms (Rotate, Flip without re-compression)
+* - EXIF Parsing (Orientation detection)
  */
 
 const JpegCORE = {
@@ -12,7 +13,7 @@ const JpegCORE = {
   Constants: {
       MARKERS: {
           SOI: 0xD8, EOI: 0xD9, SOF0: 0xC0, SOF2: 0xC2, DHT: 0xC4,
-          DQT: 0xDB, SOS: 0xDA, APP0: 0xE0, COM: 0xFE, RST0: 0xD0, RST7: 0xD7
+          DQT: 0xDB, SOS: 0xDA, APP0: 0xE0, APP1: 0xE1, COM: 0xFE, RST0: 0xD0, RST7: 0xD7
       },
       ZIG_ZAG: [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63],
       QUANT_L: [16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99],
@@ -37,6 +38,54 @@ const JpegCORE = {
 
     // --- 2. ANALYSIS ---
     Analysis: {
+        _readExifOrientation: function(seg) {
+            // Check for valid EXIF Header "Exif\0\0" at offset 4 (after Marker+Len)
+            // Seg structure: [FF, E1, LenH, LenL, 'E', 'x', 'i', 'f', 0, 0, ...TIFF...]
+            if (seg.length < 14) return null;
+            if (String.fromCharCode(...seg.slice(4, 10)) !== "Exif\0\0") return null;
+
+            const tiffStart = 10;
+            // Check Byte Order (II = Little Endian, MM = Big Endian)
+            const isLE = (seg[tiffStart] === 0x49 && seg[tiffStart + 1] === 0x49);
+
+            const readU16 = (off) => {
+                if (off + 2 > seg.length) return 0;
+                if (isLE) return seg[off] | (seg[off + 1] << 8);
+                return (seg[off] << 8) | seg[off + 1];
+            };
+            const readU32 = (off) => {
+                if (off + 4 > seg.length) return 0;
+                if (isLE) return (seg[off] | (seg[off + 1] << 8) | (seg[off + 2] << 16) | (seg[off + 3] << 24)) >>> 0;
+                return ((seg[off] << 24) | (seg[off + 1] << 16) | (seg[off + 2] << 8) | seg[off + 3]) >>> 0;
+            };
+
+            // TIFF magic 42 (0x002A)
+            if (readU16(tiffStart + 2) !== 42) return null;
+
+            // Offset to first IFD (Image File Directory)
+            const ifdOffset = readU32(tiffStart + 4);
+            let p = tiffStart + ifdOffset;
+
+            if (p >= seg.length) return null;
+
+            const numEntries = readU16(p);
+            p += 2;
+
+            for (let i = 0; i < numEntries; i++) {
+                if (p + 12 > seg.length) break;
+                const tag = readU16(p);
+                // Tag 0x0112 is "Orientation"
+                if (tag === 0x0112) {
+                    // Type 3 = SHORT (2 bytes)
+                    // Count = 1
+                    // Value is contained in the 4-byte value/offset field
+                    return readU16(p + 8);
+                }
+                p += 12;
+            }
+            return null;
+        },
+
         parseStructure: function(d) {
             const M = JpegCORE.Constants.MARKERS;
             if (d[0] !== 0xFF || d[1] !== M.SOI) throw new Error("Not a valid JPEG");
@@ -106,6 +155,7 @@ const JpegCORE = {
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
                 let infoStr = "", detectedSamp = '420';
+                let detectedOrientation = null;
                 const rawHuff = { 0: {}, 1: {} };
 
                 while (pos < d.length - 1) {
@@ -146,6 +196,13 @@ const JpegCORE = {
                                 meta.push(fullSegment);
                                 const label = (type === M.COM) ? "COM" : "APP" + (type - 0xE0);
                                 infoStr += `[${label}] `;
+                                if (type === M.APP1) {
+                                    const ori = JpegCORE.Analysis._readExifOrientation(fullSegment);
+                                    if (ori) {
+                                        detectedOrientation = ori;
+                                        infoStr += `[Ori:${ori}] `;
+                                    }
+                                }
                             }
                             pos += 2 + len;
                             continue;
@@ -169,6 +226,7 @@ const JpegCORE = {
                     detectedMode: detectedSamp,
                     detectedHuffman: foundCustom ? extractedHuff : null,
                     detectedMetaSegments: meta,
+                    detectedOrientation: detectedOrientation,
                     customQtL: qtL,
                     customQtC: qtC
                 };
