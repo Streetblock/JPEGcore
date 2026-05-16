@@ -1,8 +1,9 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.7.9  ( Forgiving DECODER / Robust Mode)
+* Extended Version 1.8.0 (Loeffler Int Integration)
 * * CORES:
-* - Decoder: Fixed IDCT amplitude/saturation bug (v1.7.5), Robust Mode(v1.7.8)
+* - Decoder: Added Loeffler Integer IDCT (Standard), Naive IDCT (Legacy/Reference),
+*            Fixed IDCT amplitude/saturation bug (v1.7.5), Robust Mode(v1.7.8)
 * - Encoder: ZigZag order fix for saving (v1.7.4), enfoceNewQuality (1.7.7)
 * * * Features  1.7.6:
 * - NEW: Quantization Crush (Deep Fry effect)
@@ -17,7 +18,9 @@ const JpegCORE = {
           SOI: 0xD8, EOI: 0xD9, SOF0: 0xC0, SOF2: 0xC2, DHT: 0xC4,
           DQT: 0xDB, SOS: 0xDA, APP0: 0xE0, APP1: 0xE1, COM: 0xFE, RST0: 0xD0, RST7: 0xD7
       },
-      ZIG_ZAG: [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63],
+      ZIG_ZAG: new Int32Array([0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]),
+
+      ZIG_ZAG_ARR: [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63],
       QUANT_L: [16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99],
       QUANT_C: [17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99],
       HUFFMAN: {
@@ -144,7 +147,7 @@ const JpegCORE = {
                 const buf = await file.arrayBuffer();
                 const d = new Uint8Array(buf);
                 const M = JpegCORE.Constants.MARKERS;
-                const ZZ = JpegCORE.Constants.ZIG_ZAG;
+                const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
                 let infoStr = "", detectedSamp = '420';
@@ -224,10 +227,14 @@ const JpegCORE = {
         }
     },
 
-    // --- 3. DECODER (v1.7.9 - Progressive Fix / Robust Mode) ---
+    // Decoder Logic: v1.8.0 (Reliable Progressive/Baseline)
+    // Memory/IDCT: v1.8.1 (Zero-Alloc, Fast)
     Decoder: {
+        // --- 1. OPTIMIZED IDCT (from v1.8.1) ---
         IDCT: class {
             constructor() {
+                this.p = new Int32Array(64);
+                this.defaultOut = new Uint8ClampedArray(64);
                 this.bases = {};
                 [1, 2, 4, 8].forEach(size => {
                     this.bases[size] = [];
@@ -240,57 +247,153 @@ const JpegCORE = {
                     }
                 });
             }
-            transform(coeffs, quantTable, outSize = 8) {
-                // Falls durch Glitch QuantTable fehlt, Fallback auf Standard nutzen um Crash zu vermeiden
-                if (!quantTable) return new Float32Array(outSize * outSize);
 
-                if (!this.bases[outSize]) return new Float32Array(outSize * outSize);
-                const base = this.bases[outSize];
-                const out = new Float32Array(outSize * outSize);
-                const normFactor = 0.25; // Fixed scaling for 8x8 source
-
-                const dqCoeffs = new Float32Array(64);
-                for(let i=0; i<64; i++) {
-                    // Safe access falls QuantTable zu kurz ist
-                    let q = quantTable[i] || 1;
-                    dqCoeffs[i] = coeffs[i] * q;
+            transform(inBuffer, inOffset, quantTable, outSize = 8, outBuffer = null, outOffset = 0) {
+                const target = outBuffer || this.defaultOut;
+                const qt = quantTable || new Uint8Array(64).fill(1);
+                if (outSize !== 8) {
+                    this._transformNaive(inBuffer, inOffset, qt, outSize, target, outOffset);
+                    return target;
                 }
+                this._transformLoefflerInt(inBuffer, inOffset, qt, target, outOffset);
+                return target;
+            }
 
+            _transformLoefflerInt(inBuffer, inOffset, qt, outBuffer, outOffset) {
+                const dctSin1 = 799, dctCos1 = 4017, dctSin3 = 2276, dctCos3 = 3406;
+                const dctSin6 = 3784, dctCos6 = 1567, dctSqrt2 = 5793, dctSqrt1d2 = 2896;
+                const p = this.p;
+                let v0, v1, v2, v3, v4, v5, v6, v7, t;
+
+                for (let i = 0; i < 8; ++i) {
+                    const row = 8 * i, blkRow = inOffset + row;
+                    if (inBuffer[blkRow+1]===0 && inBuffer[blkRow+2]===0 && inBuffer[blkRow+3]===0 &&
+                        inBuffer[blkRow+4]===0 && inBuffer[blkRow+5]===0 && inBuffer[blkRow+6]===0 && inBuffer[blkRow+7]===0) {
+                        const dcVal = inBuffer[blkRow] * qt[row];
+                        t = (dctSqrt2 * dcVal + 512) >> 10;
+                        p[row]=t; p[row+1]=t; p[row+2]=t; p[row+3]=t; p[row+4]=t; p[row+5]=t; p[row+6]=t; p[row+7]=t;
+                        continue;
+                    }
+                    v0 = (dctSqrt2 * (inBuffer[blkRow+0] * qt[row+0]) + 128) >> 8;
+                    v1 = (dctSqrt2 * (inBuffer[blkRow+4] * qt[row+4]) + 128) >> 8;
+                    v2 = inBuffer[blkRow+2] * qt[row+2]; v3 = inBuffer[blkRow+6] * qt[row+6];
+                    v4 = (dctSqrt1d2 * ((inBuffer[blkRow+1] * qt[row+1]) - (inBuffer[blkRow+7] * qt[row+7])) + 128) >> 8;
+                    v7 = (dctSqrt1d2 * ((inBuffer[blkRow+1] * qt[row+1]) + (inBuffer[blkRow+7] * qt[row+7])) + 128) >> 8;
+                    v5 = (inBuffer[blkRow+3] * qt[row+3]) << 4; v6 = (inBuffer[blkRow+5] * qt[row+5]) << 4;
+                    t = (v0 - v1+ 1) >> 1; v0 = (v0 + v1 + 1) >> 1; v1 = t;
+                    t = (v2 * dctSin6 + v3 * dctCos6 + 128) >> 8; v2 = (v2 * dctCos6 - v3 * dctSin6 + 128) >> 8; v3 = t;
+                    t = (v4 - v6 + 1) >> 1; v4 = (v4 + v6 + 1) >> 1; v6 = t;
+                    t = (v7 + v5 + 1) >> 1; v5 = (v7 - v5 + 1) >> 1; v7 = t;
+                    t = (v0 - v3 + 1) >> 1; v0 = (v0 + v3 + 1) >> 1; v3 = t;
+                    t = (v1 - v2 + 1) >> 1; v1 = (v1 + v2 + 1) >> 1; v2 = t;
+                    t = (v4 * dctSin3 + v7 * dctCos3 + 2048) >> 12; v4 = (v4 * dctCos3 - v7 * dctSin3 + 2048) >> 12; v7 = t;
+                    t = (v5 * dctSin1 + v6 * dctCos1 + 2048) >> 12; v5 = (v5 * dctCos1 - v6 * dctSin1 + 2048) >> 12; v6 = t;
+                    p[row+0] = v0 + v7; p[row+7] = v0 - v7; p[row+1] = v1 + v6; p[row+6] = v1 - v6;
+                    p[row+2] = v2 + v5; p[row+5] = v2 - v5; p[row+3] = v3 + v4; p[row+4] = v3 - v4;
+                }
+                for (let i = 0; i < 8; ++i) {
+                    const col = i;
+                    if (p[8+col]==0 && p[16+col]==0 && p[24+col]==0 && p[32+col]==0 && p[40+col]==0 && p[48+col]==0 && p[56+col]==0) {
+                        t = (dctSqrt2 * p[col] + 8192) >> 14;
+                        p[col]=t; p[8+col]=t; p[16+col]=t; p[24+col]=t; p[32+col]=t; p[40+col]=t; p[48+col]=t; p[56+col]=t;
+                        continue;
+                    }
+                    v0 = (dctSqrt2 * p[col] + 2048) >> 12; v1 = (dctSqrt2 * p[32+col] + 2048) >> 12; v2 = p[16+col]; v3 = p[48+col];
+                    v4 = (dctSqrt1d2 * (p[8+col] - p[56+col]) + 2048) >> 12; v7 = (dctSqrt1d2 * (p[8+col] + p[56+col]) + 2048) >> 12; v5 = p[24+col]; v6 = p[40+col];
+                    t = (v0 - v1 + 1) >> 1; v0 = (v0 + v1 + 1) >> 1; v1 = t;
+                    t = (v2 * dctSin6 + v3 * dctCos6 + 2048) >> 12; v2 = (v2 * dctCos6 - v3 * dctSin6 + 2048) >> 12; v3 = t;
+                    t = (v4 - v6 + 1) >> 1; v4 = (v4 + v6 + 1) >> 1; v6 = t;
+                    t = (v7 + v5 + 1) >> 1; v5 = (v7 - v5 + 1) >> 1; v7 = t;
+                    t = (v0 - v3 + 1) >> 1; v0 = (v0 + v3 + 1) >> 1; v3 = t;
+                    t = (v1 - v2 + 1) >> 1; v1 = (v1 + v2 + 1) >> 1; v2 = t;
+                    t = (v4 * dctSin3 + v7 * dctCos3 + 2048) >> 12; v4 = (v4 * dctCos3 - v7 * dctSin3 + 2048) >> 12; v7 = t;
+                    t = (v5 * dctSin1 + v6 * dctCos1 + 2048) >> 12; v5 = (v5 * dctCos1 - v6 * dctSin1 + 2048) >> 12; v6 = t;
+                    p[col] = v0 + v7; p[56+col] = v0 - v7; p[8+col] = v1 + v6; p[48+col] = v1 - v6;
+                    p[16+col] = v2 + v5; p[40+col] = v2 - v5; p[24+col] = v3 + v4; p[32+col] = v3 - v4;
+                }
+                for(let i=0; i<64; i++) { outBuffer[outOffset + i] = 128 + ((p[i] + 8) >> 4); }
+            }
+
+            _transformNaive(inBuffer, inOffset, qt, outSize, outBuffer, outOffset) {
+                const base = this.bases[outSize];
+                const block = new Float32Array(64);
+                for(let i=0; i<64; i++) block[i] = inBuffer[inOffset + i] * qt[i];
+                const norm = 0.25;
                 for (let y = 0; y < outSize; y++) {
                     for (let x = 0; x < outSize; x++) {
                         let sum = 0;
                         for (let u = 0; u < outSize; u++) {
                             for (let v = 0; v < outSize; v++) {
-                                sum += dqCoeffs[u * 8 + v] * base[u][y] * base[v][x];
+                                sum += block[u * 8 + v] * base[u][y] * base[v][x];
                             }
                         }
-                        out[y * outSize + x] = sum * normFactor;
+                        outBuffer[outOffset + y * outSize + x] = sum * norm;
                     }
                 }
-                return out;
             }
         },
 
-        extractBlocks: async function(file) {
+        // --- 2. HYBRID EXTRACTION (v1.8.0 Logic + Flat Buffer Output) ---
+        extractBlocksStruct: async function(file) {
             try {
                 const buf = await file.arrayBuffer();
                 const d = new Uint8Array(buf);
-                const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG, SM = JpegCORE.Constants.SAMPLE_MODES;
+                const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG_ARR, SM = JpegCORE.Constants.SAMPLE_MODES;
                 const H = JpegCORE.Constants.HUFFMAN;
+
+                // --- Bit Reader (v1.8.0 Style) ---
+                let bp = 0, bb = 0, bc = 0;
+                const nb = () => {
+                    if (bc === 0) {
+                        if (bp >= d.length) return null;
+                        let b = d[bp++];
+                        if (b === 0xFF) {
+                            if (bp >= d.length) return null;
+                            let next = d[bp];
+                            if (next === 0) { bp++; }
+                            else if (next >= 0xD0 && next <= 0xD7) { bp++; return 'RST'; }
+                            else if (next === M.EOI) { return null; }
+                            else { return 'MARKER'; }
+                        }
+                        bb = b; bc = 8;
+                    }
+                    const bit = (bb >> (bc - 1)) & 1;
+                    bc--;
+                    return bit;
+                };
 
                 const readRawBits = (l) => {
                     let v = 0;
                     for (let i = 0; i < l; i++) {
                         const b = nb();
-                        if (b === null) return 0; // Error handling
+                        if (b === null) return 0;
                         v = (v << 1) | b;
                     }
                     return v;
                 };
 
-                // --- Robustheit 1: Header Check lockern ---
-                if (d.length < 2) throw new Error("File too short");
+                const rh = (m) => {
+                    let k = "", safety = 0;
+                    while (k.length < 16 && safety++ < 32) {
+                        const b = nb();
+                        if (b === 'MARKER' || b === 'RST' || b === null) return b;
+                        k += b;
+                        if (m[k] !== undefined) return m[k];
+                    }
+                    return null;
+                };
 
+                const rv = (l) => {
+                    let v = 0;
+                    for (let i = 0; i < l; i++) {
+                        const b = nb();
+                        if (b === 'MARKER' || b === 'RST' || b === null) return null;
+                        v = (v << 1) | b;
+                    }
+                    return v < (1 << (l - 1)) ? v + (-1 << l) + 1 : v;
+                };
+
+                if (d.length < 2) throw new Error("File too short");
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
 
                 const mh = (L, V) => {
@@ -299,7 +402,7 @@ const JpegCORE = {
                         for (let j = 0; j < L[i - 1]; j++) {
                             let k = "";
                             for (let x = i - 1; x >= 0; x--) k += (c >> x) & 1;
-                            if(p < V.length) t[k] = V[p++]; // Safe Check
+                            if(p < V.length) t[k] = V[p++];
                             c++;
                         }
                         c <<= 1;
@@ -307,29 +410,24 @@ const JpegCORE = {
                     return t;
                 };
 
-                let tables = {
-                    0: { 0: mh(H.DC_L_NR, H.DC_L_VAL), 1: mh(H.DC_C_NR, H.DC_C_VAL) },
-                    1: { 0: mh(H.AC_L_NR, H.AC_L_VAL), 1: mh(H.AC_C_NR, H.AC_C_VAL) }
-                };
+                let tables = { 0: { 0: mh(H.DC_L_NR, H.DC_L_VAL), 1: mh(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: mh(H.AC_L_NR, H.AC_L_VAL), 1: mh(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
 
-                // Suche nach SOI
                 if (d[0] === 0xFF && d[1] === M.SOI) pos = 2;
 
-                // --- Robustheit 2: Header Parsing Loop (Abgesichert) ---
+                // --- Header Parsing (v1.8.0 Style - Robust) ---
                 while (pos < d.length - 1) {
                     if (d[pos] !== 0xFF) { pos++; continue; }
                     while (d[pos] === 0xFF && pos < d.length) pos++;
                     if (pos >= d.length) break;
                     const marker = d[pos];
 
-                    if (marker === M.SOS) break; // Scan start found!
+                    if (marker === M.SOS) break;
 
-                    // Längen-Check: Verhindert Absturz wenn Datei mitten im Header endet
                     if (pos + 2 >= d.length) break;
                     const len = (d[pos + 1] << 8) | d[pos + 2];
                     const segmentEnd = pos + 1 + len;
-                    if (segmentEnd > d.length) break; // Segment kaputt, Abbruch Header-Parsing
+                    if (segmentEnd > d.length) break;
 
                     if (marker === M.SOF0 || marker === M.SOF2) {
                         h = (d[pos + 4] << 8) | d[pos + 5];
@@ -367,78 +465,40 @@ const JpegCORE = {
                             const info = d[subPos++];
                             const id = info & 0x0F;
                             const naturalTbl = new Uint8Array(64);
-                            for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10; // Fallback value
+                            for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10;
                             quantTables[id] = naturalTbl;
                         }
                     }
                     pos = segmentEnd;
                 }
 
-                // --- Fallback für Dimensionen ---
-                if (!w || !h) {
-                    console.warn("Forgiving Decoder: No dimensions found. Assuming corrupted header.");
-                    return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
-                }
-
-                if (!mcuStructure) mcuStructure = SM['420']; // Fallback
+                if (!w || !h || !mcuStructure) return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
 
                 const blocksPerMCU = mcuStructure.blocks.length;
                 const cols = Math.ceil(w / (mcuStructure.hMax * 8));
                 const rows = Math.ceil(h / (mcuStructure.vMax * 8));
                 const totalBlocks = cols * rows * blocksPerMCU;
 
+                // --- CRITICAL CHANGE: Use Flat Buffer (v1.8.1 style) ---
                 const coeffBuffer = new Int32Array(totalBlocks * 64);
 
-                let bp = pos;
-                let bb = 0;
-                let bc = 0;
-
-                const nb = () => {
-                    if (bc === 0) {
-                        if (bp >= d.length) return null; // EOF graceful handling
-                        let b = d[bp++];
-                        if (b === 0xFF) {
-                            if (bp >= d.length) return null;
-                            let next = d[bp];
-                            if (next === 0) { bp++; }
-                            else if (next >= 0xD0 && next <= 0xD7) { bp++; return 'RST'; }
-                            else if (next === M.EOI) { return null; }
-                            else { return 'MARKER'; }
-                        }
-                        bb = b; bc = 8;
+                // Create minimal BlockList Metadata (needed for renderer)
+                const blockList = new Array(totalBlocks);
+                for(let m = 0; m < cols * rows; m++) {
+                    for(let b = 0; b < blocksPerMCU; b++) {
+                        const idx = m * blocksPerMCU + b;
+                        const def = mcuStructure.blocks[b];
+                        blockList[idx] = { type: def.t, comp: (def.t === 'C') ? (def.c === 0 ? 1 : 2) : 0 };
                     }
-                    const bit = (bb >> (bc - 1)) & 1;
-                    bc--;
-                    return bit;
-                };
+                }
 
-                const rh = (m) => {
-                    let k = "";
-                    let safety = 0;
-                    while (k.length < 16 && safety++ < 32) {
-                        const b = nb();
-                        if (b === 'MARKER' || b === 'RST' || b === null) return b;
-                        k += b;
-                        if (m[k] !== undefined) return m[k];
-                    }
-                    return null;
-                };
-
-                const rv = (l) => {
-                    let v = 0;
-                    for (let i = 0; i < l; i++) {
-                        const b = nb();
-                        if (b === 'MARKER' || b === 'RST' || b === null) return null;
-                        v = (v << 1) | b;
-                    }
-                    return v < (1 << (l - 1)) ? v + (-1 << l) + 1 : v;
-                };
+                bp = pos;
+                bb = 0; bc = 0;
 
                 if (pos < d.length && d[pos] !== 0xFF && d[pos-1] === 0xFF) pos--;
-
                 let predDC = [0, 0, 0];
 
-                // --- Robustheit 3: Scan Loop in Try/Catch ---
+                // --- SCAN LOOP (v1.8.0 LOGIC - PRESERVED) ---
                 try {
                     while (pos < d.length - 1) {
                         if (d[pos] !== 0xFF) { pos++; continue; }
@@ -466,11 +526,10 @@ const JpegCORE = {
 
                             bp = sosEnd; bb = 0; bc = 0;
 
-                            // --- PROGRESSIVE STATE VARIABLES ---
                             let eob_run = 0;
                             let successiveACState = 0;
                             let successiveACNextValue = 0;
-                            let acRun = 0; // Temp counter for zero skipping
+                            let acRun = 0;
 
                             if (Ss === 0) predDC = [0,0,0];
 
@@ -483,23 +542,21 @@ const JpegCORE = {
 
                             let markerFound = false;
 
-                            // Haupt-Pixel-Schleife
                             for (let m = 0; m < cols * rows; m++) {
                                 for (let c of comps) {
                                     const blkIndices = typeToIndices[c.type];
                                     if (!blkIndices) continue;
 
                                     for (let bIdx of blkIndices) {
+                                        // Write directly to global coeffBuffer
                                         const blockOffset = (m * blocksPerMCU + bIdx) * 64;
                                         if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
 
-                                        // --- DC DECODING ---
                                         if (Ss === 0) {
                                             const tbl = (tables[0][c.dcTbl]) ? tables[0][c.dcTbl] : tables[0][0];
                                             if (!tbl) { markerFound = true; break; }
 
                                             if (Ah === 0) {
-                                                // DC First
                                                 let s = rh(tbl);
                                                 if (s === 'RST') { predDC[c.type] = 0; bc = 0; eob_run = 0; successiveACState = 0; s = rh(tbl); }
                                                 if (s === 'MARKER' || s === null) { markerFound = true; break; }
@@ -508,7 +565,6 @@ const JpegCORE = {
                                                 predDC[c.type] += diff;
                                                 coeffBuffer[blockOffset] = predDC[c.type] << Al;
                                             } else {
-                                                // DC Refine
                                                 let bit = nb();
                                                 if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
                                                 if (bit === 1) {
@@ -518,13 +574,11 @@ const JpegCORE = {
                                             }
                                         }
 
-                                        // --- AC DECODING ---
                                         if (Se > 0) {
                                             const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
                                             if (!tbl) { markerFound = true; break; }
 
                                             if (Ah === 0) {
-                                                // --- AC FIRST SCAN (Standard Huffman) ---
                                                 if (eob_run > 0) {
                                                     eob_run--;
                                                 } else {
@@ -533,17 +587,13 @@ const JpegCORE = {
                                                         let s = rh(tbl);
                                                         if (s === 'RST') { bc=0; eob_run=0; s = rh(tbl); }
                                                         if (s === 'MARKER' || s === null) { markerFound = true; break; }
-
                                                         const r = s >> 4, v = s & 15;
                                                         if (v === 0) {
-                                                            if (r < 15) { // EOB
+                                                            if (r < 15) {
                                                                 eob_run = (1 << r) + readRawBits(r);
                                                                 if (eob_run === null) { eob_run=0; markerFound=true; break; }
-                                                                eob_run--;
-                                                                break;
-                                                            } else { // ZRL
-                                                                k += 15;
-                                                            }
+                                                                eob_run--; break;
+                                                            } else { k += 15; }
                                                         } else {
                                                             k += r;
                                                             const val = rv(v);
@@ -553,101 +603,64 @@ const JpegCORE = {
                                                         k++;
                                                     }
                                                 }
-
                                             } else {
-                                                // --- AC SUCCESSIVE SCAN (Refine) - FIXED LOGIC ---
                                                 let k = Math.max(Ss, 1);
                                                 while (k <= Se) {
                                                     const z = ZZ[k];
                                                     const idx = blockOffset + z;
-                                                    const direction = coeffBuffer[idx] < 0 ? -1 : 1;
-
                                                     switch (successiveACState) {
-                                                        case 0: // Initial State: Huffman lesen
+                                                        case 0:
                                                             let rs = rh(tbl);
                                                             if (rs === 'RST') { bc=0; eob_run=0; successiveACState=0; rs = rh(tbl); }
                                                             if (rs === 'MARKER' || rs === null) { markerFound = true; break; }
-
                                                             const s = rs & 15, r = rs >> 4;
                                                             if (s === 0) {
-                                                                if (r < 15) { // EOB
+                                                                if (r < 15) {
                                                                     eob_run = (1 << r) + readRawBits(r);
                                                                     if (eob_run === null) { markerFound=true; break; }
                                                                     successiveACState = 4;
-                                                                } else { // ZRL
-                                                                    acRun = 16;
-                                                                    successiveACState = 1;
-                                                                }
+                                                                } else { acRun = 16; successiveACState = 1; }
                                                             } else {
-                                                                if (s !== 1) {
-                                                                    console.warn("Invalid AC encoding in Successive Scan");
-                                                                    markerFound = true; break;
-                                                                }
-                                                                successiveACNextValue = rv(s); // -1 oder 1
+                                                                successiveACNextValue = rv(s);
                                                                 if (successiveACNextValue === null) { markerFound=true; break; }
                                                                 successiveACState = (r > 0) ? 2 : 3;
                                                                 acRun = r;
                                                             }
-                                                            continue; // Wichtig: k noch nicht erhöhen, wir verarbeiten erst den State!
-
-                                                        case 1: // Skipping ZRL (Zero Run Length)
-                                                        case 2: // Skipping r Zeroes
+                                                            continue;
+                                                        case 1: case 2:
                                                             if (coeffBuffer[idx] !== 0) {
-                                                                // REFINE existierenden Wert
                                                                 let bit = nb();
                                                                 if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) {
-                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
-                                                                    else coeffBuffer[idx] -= (1 << Al);
-                                                                }
+                                                                if (bit === 1) { if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al); else coeffBuffer[idx] -= (1 << Al); }
                                                             } else {
-                                                                // Echte Null überspringen
                                                                 acRun--;
-                                                                if (acRun === 0) {
-                                                                    successiveACState = (successiveACState === 2) ? 3 : 0;
-                                                                }
+                                                                if (acRun === 0) successiveACState = (successiveACState === 2) ? 3 : 0;
                                                             }
                                                             break;
-
-                                                        case 3: // Set Value (nach Skips)
+                                                        case 3:
                                                             if (coeffBuffer[idx] !== 0) {
-                                                                // REFINE existierenden Wert
                                                                 let bit = nb();
                                                                 if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) {
-                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
-                                                                    else coeffBuffer[idx] -= (1 << Al);
-                                                                }
+                                                                if (bit === 1) { if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al); else coeffBuffer[idx] -= (1 << Al); }
                                                             } else {
-                                                                // Neuen Wert setzen
                                                                 coeffBuffer[idx] = successiveACNextValue << Al;
                                                                 successiveACState = 0;
                                                             }
                                                             break;
-
-                                                        case 4: // EOB Run (Rest des Blocks)
+                                                        case 4:
                                                             if (coeffBuffer[idx] !== 0) {
-                                                                // REFINE existierenden Wert auch während EOB!
                                                                 let bit = nb();
                                                                 if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) {
-                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
-                                                                    else coeffBuffer[idx] -= (1 << Al);
-                                                                }
+                                                                if (bit === 1) { if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al); else coeffBuffer[idx] -= (1 << Al); }
                                                             }
                                                             break;
                                                     }
                                                     if (markerFound) break;
                                                     k++;
                                                 }
-
-                                                // Ende des Blocks erreicht -> EOB Run verwalten
-                                                if (successiveACState === 4) {
-                                                    eob_run--;
-                                                    if (eob_run === 0) successiveACState = 0;
-                                                }
+                                                if (successiveACState === 4) { eob_run--; if (eob_run === 0) successiveACState = 0; }
                                             }
-                                        } // End AC Decoding
+                                        }
                                         if (markerFound) break;
                                     }
                                     if (markerFound) break;
@@ -671,22 +684,16 @@ const JpegCORE = {
                             }
                             pos = end;
                         } else if (marker === M.EOI) { break; }
-                        else {
-                            const len = (d[pos + 1] << 8) | d[pos + 2];
-                            pos += 1 + len;
-                        }
+                        else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
                     }
-                } catch (e) {
-                    console.warn("Forgiving Decoder caught error (rendering partial):", e);
-                }
+                } catch (e) { console.warn("Forgiving Decoder caught error:", e); }
 
-                const allBlocks = [];
-                for (let i = 0; i < totalBlocks; i++) {
-                    const off = i * 64, bTypeIndex = i % blocksPerMCU, bDef = mcuStructure.blocks[bTypeIndex], isChroma = bDef.t === 'C';
-                    allBlocks.push({ data: coeffBuffer.slice(off, off + 64), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
-                }
-
-                return { blocks: allBlocks, w, h, mode: finalMode, quantTables: quantTables, compMap: compMapList };
+                // --- RETURN STRUCT (Compatible with 1.8.1 Renderer) ---
+                return {
+                    coeffBuffer: coeffBuffer, // The Flat Buffer!
+                    blockList: blockList,     // The Metadata
+                    w, h, mode: finalMode, quantTables: quantTables, compMap: compMapList
+                };
 
             } catch (globalErr) {
                 console.error("Critical Decoder Failure:", globalErr);
@@ -694,87 +701,124 @@ const JpegCORE = {
             }
         },
 
+        // Wrapper für Abwärtskompatibilität zu v1.8.0
+        extractBlocks: async function(file) {
+            // 1. Die neue, schnelle Funktion aufrufen
+            const optimized = await this.extractBlocksStruct(file);
+
+            // 2. Das "Flat Buffer" Array in einzelne Block-Objekte zerlegen (Legacy Format)
+            const legacyBlocks = new Array(optimized.blockList.length);
+
+            for (let i = 0; i < optimized.blockList.length; i++) {
+                // Die 64 Koeffizienten für diesen Block ausschneiden
+                const start = i * 64;
+                const end = start + 64;
+                // .slice() erzeugt eine Kopie, was genau dem Verhalten von 1.8.0 entspricht
+                const blockData = optimized.coeffBuffer.slice(start, end);
+
+                // Das Metadaten-Objekt holen
+                const meta = optimized.blockList[i];
+
+                // Beides im alten Format zusammenfügen
+                legacyBlocks[i] = {
+                    data: blockData,
+                    type: meta.type,
+                    comp: meta.comp
+                };
+            }
+
+            // 3. Das alte Rückgabe-Objekt zurückgeben
+            return {
+                blocks: legacyBlocks,
+                w: optimized.w,
+                h: optimized.h,
+                mode: optimized.mode,
+                quantTables: optimized.quantTables,
+                compMap: optimized.compMap
+            };
+        },
+
+        // --- 3. OPTIMIZED RENDERER (from v1.8.1) ---
         render: function(decoded, scale = 1.0) {
-            if (!decoded || !decoded.blocks || decoded.blocks.length === 0) return new ImageData(1, 1);
+            if (!decoded) return new ImageData(1, 1);
+
+            // Handle both legacy (object array) and optimized (flat buffer) structures
+            const isOptimized = !!decoded.coeffBuffer;
+            const blockList = decoded.blockList || decoded.blocks;
+            if (!blockList) return new ImageData(1, 1);
 
             let blockSize = 8;
-            if (scale === 0.5) blockSize = 4; else if (scale === 0.25) blockSize = 2; else if (scale === 0.125) blockSize = 1;
+            if (scale === 0.5) blockSize = 4; else if (scale === 0.25) blockSize = 2;
 
             const w = Math.ceil(decoded.w * scale), h = Math.ceil(decoded.h * scale);
-            const mode = decoded.mode || '420', blocks = decoded.blocks;
-            if (w > 16000 || h > 16000) throw new Error("Image too large (Glitch detected)");
+            const mode = decoded.mode || '420';
+            const buffer = decoded.coeffBuffer;
 
             const finalData = new Uint8ClampedArray(w * h * 4);
             const idctEngine = new JpegCORE.Decoder.IDCT();
             const SM = JpegCORE.Constants.SAMPLE_MODES[mode] || JpegCORE.Constants.SAMPLE_MODES['420'];
-            const ZZ = JpegCORE.Constants.ZIG_ZAG;
 
             const ensureNatural = (zzTbl) => {
                 const n = new Uint8Array(64);
                 if (!zzTbl) return n;
+                const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
                 for (let i = 0; i < 64; i++) n[ZZ[i]] = zzTbl[i];
                 return n;
             };
-
             const defaultQ = { 0: ensureNatural(JpegCORE.Constants.QUANT_L), 1: ensureNatural(JpegCORE.Constants.QUANT_C) };
             const compToQT = {};
-
-            if (decoded.compMap && decoded.compMap.length > 0) {
-                decoded.compMap.forEach(c => {
-                    const t = decoded.quantTables[c.tq];
-                    compToQT[c.type] = t || defaultQ[c.type === 0 ? 0 : 1];
-                });
-            } else {
-                compToQT[0] = defaultQ[0]; compToQT[1] = defaultQ[1]; compToQT[2] = defaultQ[1];
-            }
+            if (decoded.compMap) decoded.compMap.forEach(c => compToQT[c.type] = decoded.quantTables[c.tq] || defaultQ[c.type===0?0:1]);
+            else { compToQT[0]=defaultQ[0]; compToQT[1]=defaultQ[1]; compToQT[2]=defaultQ[1]; }
 
             const mcuW = SM.hMax * blockSize, mcuH = SM.vMax * blockSize;
             const cols = Math.ceil(w / mcuW), rows = Math.ceil(h / mcuH);
             const blocksPerMCU = SM.blocks.length;
+            const mcuPixelBuffer = new Uint8ClampedArray(16 * 64);
 
             let bIdx = 0;
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
-                    const spatialBlocks = [];
-                    for (let b = 0; b < blocksPerMCU; b++) {
-                        let rawBlock = { data: new Int32Array(64), comp: 0, type: 'Y' };
-                        if (bIdx < blocks.length) {
-                             rawBlock = blocks[bIdx++];
-                        }
-                        if (!rawBlock.type) rawBlock.type = SM.blocks[b].t;
 
-                        spatialBlocks.push({
-                            pixels: idctEngine.transform(rawBlock.data, compToQT[rawBlock.comp] || defaultQ[0], blockSize),
-                            def: SM.blocks[b]
-                        });
+            for (let r = 0; r < rows; r++) {
+                const rowStartBase = r * mcuH * w * 4;
+                for (let c = 0; c < cols; c++) {
+                    for (let b = 0; b < blocksPerMCU; b++) {
+                        if (bIdx >= blockList.length) break;
+                        const blockMeta = blockList[bIdx];
+                        let offset = isOptimized ? bIdx * 64 : 0;
+                        let rawData = isOptimized ? buffer : blockMeta.data;
+
+                        idctEngine.transform(rawData, offset, compToQT[blockMeta.comp], blockSize, mcuPixelBuffer, b * 64);
+                        bIdx++;
                     }
+
                     const originX = c * mcuW, originY = r * mcuH;
                     for (let y = 0; y < mcuH; y++) {
+                        const absY = originY + y;
+                        if (absY >= h) break;
+                        let idx = rowStartBase + (y * w * 4) + (originX * 4);
                         for (let x = 0; x < mcuW; x++) {
-                            const absX = originX + x, absY = originY + y;
-                            if (absX >= w || absY >= h) continue;
-
+                            const absX = originX + x;
+                            if (absX >= w) break;
                             let Y = 0, Cb = 0, Cr = 0;
-                            for (let sb of spatialBlocks) {
-                                if (sb.def.t === 'Y') {
-                                    const bxStart = sb.def.dx * blockSize, byStart = sb.def.dy * blockSize;
+                            for (let b = 0; b < blocksPerMCU; b++) {
+                                const def = SM.blocks[b];
+                                const blockPixelsOffset = b * 64;
+                                if (def.t === 'Y') {
+                                    const bxStart = def.dx * blockSize, byStart = def.dy * blockSize;
                                     if (x >= bxStart && x < bxStart + blockSize && y >= byStart && y < byStart + blockSize) {
-                                        Y = sb.pixels[(y - byStart) * blockSize + (x - bxStart)];
+                                        Y = mcuPixelBuffer[blockPixelsOffset + (y - byStart) * blockSize + (x - bxStart)];
                                     }
-                                } else if (sb.def.t === 'C') {
-                                    const cx = Math.floor(x / SM.hMax), cy = Math.floor(y / SM.vMax);
-                                    if (cx < blockSize && cy < blockSize) {
-                                        const val = sb.pixels[cy * blockSize + cx];
-                                        if (sb.def.c === 0) Cb = val; else Cr = val;
-                                    }
+                                } else {
+                                    const cx = (x / SM.hMax) | 0, cy = (y / SM.vMax) | 0;
+                                    const chromaIdx = blockPixelsOffset + cy * blockSize + cx;
+                                    const val = mcuPixelBuffer[chromaIdx];
+                                    if (def.c === 0) Cb = val; else Cr = val;
                                 }
                             }
-                            const pixelY = Y + 128;
-                            const idx = (absY * w + absX) * 4;
-                            finalData[idx] = pixelY + 1.402 * Cr;
-                            finalData[idx + 1] = pixelY - 0.344136 * Cb - 0.714136 * Cr;
-                            finalData[idx + 2] = pixelY + 1.772 * Cb;
-                            finalData[idx + 3] = 255;
+                            const adjCb = Cb - 128, adjCr = Cr - 128;
+                            finalData[idx++] = Y + 1.402 * adjCr;
+                            finalData[idx++] = Y - 0.344136 * adjCb - 0.714136 * adjCr;
+                            finalData[idx++] = Y + 1.772 * adjCb;
+                            finalData[idx++] = 255;
                         }
                     }
                 }
@@ -923,7 +967,7 @@ const JpegCORE = {
         },
 
         shred: function(captured, threshold) {
-            const ZZ = JpegCORE.Constants.ZIG_ZAG;
+            const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
             for (let b of captured.blocks) {
                 for(let z = threshold; z < 64; z++) {
                     b.data[ZZ[z]] = 0;
@@ -933,7 +977,7 @@ const JpegCORE = {
         },
 
         fuzz: function(captured, threshold, amount) {
-            const ZZ = JpegCORE.Constants.ZIG_ZAG;
+            const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
             for (let b of captured.blocks) {
                 for(let z = threshold; z < 64; z++) {
                      if (Math.random() < 0.2) {
@@ -1009,7 +1053,7 @@ const JpegCORE = {
 
             const toNatural = (zz) => {
                 const n = new Uint8Array(64);
-                const Z = C.ZIG_ZAG;
+                const Z = C.ZIG_ZAG_ARR;
                 for(let i=0; i<64; i++) n[Z[i]] = zz[i];
                 return n;
             };
@@ -1099,7 +1143,7 @@ const JpegCORE = {
 
             const toZigZag = (n) => {
                 const zz = new Uint8Array(64);
-                const Z = JpegCORE.Constants.ZIG_ZAG;
+                const Z = JpegCORE.Constants.ZIG_ZAG_ARR;
                 for(let i=0; i<64; i++) zz[i] = n[Z[i]];
                 return zz;
             };
@@ -1132,7 +1176,7 @@ const JpegCORE = {
         }
 
         ems(b, p, hd, ha) {
-            const ZZ = JpegCORE.Constants.ZIG_ZAG;
+            const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
             let d = b[0] - p, a = Math.abs(d), l = 0; while (a > 0) { l++; a >>= 1; }
             this.wh(hd, l); if (l > 0) { if (d < 0) d -= 1; this.wbt(d & ((1 << l) - 1), l); }
             let z = 0;
