@@ -875,18 +875,49 @@ const JpegCORE = {
                                 if (!typeToIndices[t]) typeToIndices[t] = [];
                                 typeToIndices[t].push(b);
                             }
+                            // For non-interleaved scans (Ns=1), JPEG requires component blocks
+                            // in left-to-right/top-to-bottom component raster order.
+                            const compBlockOrder = {};
+                            const buildCompBlockOrder = (compType) => {
+                                if (compBlockOrder[compType]) return compBlockOrder[compType];
+                                const blkIndices = typeToIndices[compType] || [];
+                                if (blkIndices.length === 0) { compBlockOrder[compType] = []; return compBlockOrder[compType]; }
+
+                                let hComp = 0, vComp = 0;
+                                const subToBIdx = {};
+                                for (const bIdx of blkIndices) {
+                                    const def = mcuStructure.blocks[bIdx];
+                                    const key = `${def.dx},${def.dy}`;
+                                    subToBIdx[key] = bIdx;
+                                    if (def.dx + 1 > hComp) hComp = def.dx + 1;
+                                    if (def.dy + 1 > vComp) vComp = def.dy + 1;
+                                }
+
+                                const ordered = [];
+                                const compCols = cols * hComp;
+                                const compRows = rows * vComp;
+                                for (let by = 0; by < compRows; by++) {
+                                    const mcuY = (by / vComp) | 0;
+                                    const subY = by % vComp;
+                                    for (let bx = 0; bx < compCols; bx++) {
+                                        const mcuX = (bx / hComp) | 0;
+                                        const subX = bx % hComp;
+                                        const key = `${subX},${subY}`;
+                                        const bIdx = subToBIdx[key];
+                                        if (bIdx === undefined) continue;
+                                        const m = mcuY * cols + mcuX;
+                                        ordered.push(m * blocksPerMCU + bIdx);
+                                    }
+                                }
+                                compBlockOrder[compType] = ordered;
+                                return ordered;
+                            };
 
                             let markerFound = false;
 
-                            // --- Haupt-MCU Loop ---
-                            for (let m = 0; m < cols * rows; m++) {
-                                for (let c of comps) {
-                                    const blkIndices = typeToIndices[c.type];
-                                    if (!blkIndices) continue;
-
-                                    for (let bIdx of blkIndices) {
-                                        const blockOffset = (m * blocksPerMCU + bIdx) * 64;
-                                        if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
+                            // --- Main decode loop ---
+                            const decodeOneBlock = (blockOffset, c) => {
+                                        if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; return; }
 
                                         // --- DC SCAN ---
                                         if (Ss === 0) {
@@ -894,14 +925,14 @@ const JpegCORE = {
                                             if (Ah === 0) {
                                                 let s = rh(tbl);
                                                 if (s === STAT_RST) { predDC = [0,0,0]; s = rh(tbl); }
-                                                if (s === STAT_MARKER || s === null) { markerFound = true; break; }
+                                                if (s === STAT_MARKER || s === null) { markerFound = true; return; }
                                                 let diff = (s === 0) ? 0 : rv(s);
-                                                if (diff === null) { markerFound = true; break; }
+                                                if (diff === null) { markerFound = true; return; }
                                                 predDC[c.type] += diff;
                                                 coeffBuffer[blockOffset] = predDC[c.type] << Al;
                                             } else {
                                                 let bit = nb();
-                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
+                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; return; }
                                                 if (bit === 1) coeffBuffer[blockOffset] |= (1 << Al);
                                             }
                                         }
@@ -1008,18 +1039,36 @@ const JpegCORE = {
                                                     k++;
                                                 }
 
-                                                if (markerFound) break;
+                                                if (markerFound) return;
                                                 if (successiveACState === 4) {
                                                     eob_run--;
                                                     if (eob_run === 0) successiveACState = 0;
                                                 }
                                             }
                                         }
+                            };
+
+                            if (ns === 1 && comps.length === 1) {
+                                const c = comps[0];
+                                const orderedBlocks = buildCompBlockOrder(c.type);
+                                for (let gIdx of orderedBlocks) {
+                                    decodeOneBlock(gIdx * 64, c);
+                                    if (markerFound) break;
+                                }
+                            } else {
+                                for (let m = 0; m < cols * rows; m++) {
+                                    for (let c of comps) {
+                                        const blkIndices = typeToIndices[c.type];
+                                        if (!blkIndices) continue;
+                                        for (let bIdx of blkIndices) {
+                                            const blockOffset = (m * blocksPerMCU + bIdx) * 64;
+                                            decodeOneBlock(blockOffset, c);
+                                            if (markerFound) break;
+                                        }
                                         if (markerFound) break;
                                     }
                                     if (markerFound) break;
                                 }
-                                if (markerFound) break;
                             }
 
                             // FIX: Synchronisiere die Stream-Position fÃ¼r den nÃ¤chsten Scan.
