@@ -240,9 +240,9 @@ const JpegCORE = {
         }
     },
 
-    // --- 3. DECODER (v1.6.6 - FIXED PROGRESSIVE) ---
+    // --- 3. DECODER (v1.7.2 - FIXED PROGRESSIVE) ---
     Decoder: {
-IDCT: class {
+        IDCT: class {
             constructor() {
                 this.bases = {};
                 [1, 2, 4, 8].forEach(size => {
@@ -262,8 +262,7 @@ IDCT: class {
                 const out = new Float32Array(outSize * outSize);
                 const normFactor = 2 / outSize;
 
-                // Optimization: Pre-calculate de-quantized coefficients
-                // to avoid doing it inside the nested loop
+                // Pre-calculate de-quantized coefficients
                 const dqCoeffs = new Float32Array(64);
                 for(let i=0; i<64; i++) dqCoeffs[i] = coeffs[i] * quantTable[i];
 
@@ -272,8 +271,7 @@ IDCT: class {
                         let sum = 0;
                         for (let u = 0; u < outSize; u++) {
                             for (let v = 0; v < outSize; v++) {
-                                // FIXED: Matches u(RowFreq) with y(RowPos) and v(ColFreq) with x(ColPos)
-                                // Old Broken Code: base[u][x] * base[v][y]
+                                // Correct Transpose: u->y (Row), v->x (Col)
                                 sum += dqCoeffs[u * 8 + v] * base[u][y] * base[v][x];
                             }
                         }
@@ -321,9 +319,7 @@ IDCT: class {
                 while (d[pos] === 0xFF && pos < d.length) pos++;
                 if (pos >= d.length) break;
                 const marker = d[pos];
-
                 if (marker === M.SOS) break;
-
                 const len = (d[pos + 1] << 8) | d[pos + 2];
                 const segmentEnd = pos + 1 + len;
 
@@ -382,7 +378,6 @@ IDCT: class {
             let bb = 0;
             let bc = 0;
 
-            // FIX: Robust Next Bit with correct RST handling
             const nb = () => {
                 if (bc === 0) {
                     if (bp >= d.length) return null;
@@ -390,18 +385,12 @@ IDCT: class {
                     if (b === 0xFF) {
                         if (bp >= d.length) return null;
                         let next = d[bp];
-                        if (next === 0) {
-                            bp++;
-                        } else if (next >= 0xD0 && next <= 0xD7) {
-                            bp++; return 'RST'; // Explicit RST handling
-                        } else if (next === M.EOI) {
-                            return null;
-                        } else {
-                            return 'MARKER';
-                        }
+                        if (next === 0) { bp++; }
+                        else if (next >= 0xD0 && next <= 0xD7) { bp++; return 'RST'; }
+                        else if (next === M.EOI) { return null; }
+                        else { return 'MARKER'; }
                     }
-                    bb = b;
-                    bc = 8;
+                    bb = b; bc = 8;
                 }
                 const bit = (bb >> (bc - 1)) & 1;
                 bc--;
@@ -445,22 +434,13 @@ IDCT: class {
                     scanCount++;
                     const len = (d[pos + 1] << 8) | d[pos + 2];
                     const sosEnd = pos + 1 + len;
-
-                    // FIX: Offset correction for SOS parameters (pos+3 instead of pos+4)
                     const ns = d[pos + 3];
                     const comps = [];
                     for (let i = 0; i < ns; i++) {
-                        // FIX: Correct offsets for component selector and tables
                         const cs = d[pos + 4 + i * 2];
                         const tdta = d[pos + 5 + i * 2];
                         const mapObj = compMapList.find(x => x.id === cs);
-                        if (mapObj) {
-                            comps.push({
-                                type: mapObj.type,
-                                dcTbl: (tdta >> 4) & 0xF,
-                                acTbl: tdta & 0xF
-                            });
-                        }
+                        if (mapObj) comps.push({ type: mapObj.type, dcTbl: (tdta >> 4) & 0xF, acTbl: tdta & 0xF });
                     }
                     const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
                     const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
@@ -483,26 +463,23 @@ IDCT: class {
                             for (let bIdx of blkIndices) {
                                 const blockOffset = (m * blocksPerMCU + bIdx) * 64;
 
-                                // Decode Logic
                                 if (Ss === 0) { // DC
                                     if (Ah === 0) {
                                         const tbl = tables[0][c.dcTbl];
                                         let s = rh(tbl);
-                                        // FIX: Handle RST properly
-                                        if (s === 'RST') {
-                                            predDC[c.type] = 0; bc = 0; eob_run = 0;
-                                            s = rh(tbl);
-                                        }
+                                        if (s === 'RST') { predDC[c.type] = 0; bc = 0; eob_run = 0; s = rh(tbl); }
                                         if (s === 'MARKER' || s === null) { markerFound = true; break; }
-
-                                        let diff = 0;
-                                        if (s !== 0) diff = rv(s);
+                                        let diff = 0; if (s !== 0) diff = rv(s);
                                         predDC[c.type] += diff;
                                         coeffBuffer[blockOffset] = predDC[c.type] << Al;
                                     } else {
                                         let bit = nb();
                                         if (bit === 'MARKER') { markerFound = true; break; }
-                                        if (bit === 1) coeffBuffer[blockOffset] |= (1 << Al);
+                                        // --- FIX: Handle negative DC refinement correctly ---
+                                        if (bit === 1) {
+                                            if (coeffBuffer[blockOffset] >= 0) coeffBuffer[blockOffset] += (1 << Al);
+                                            else coeffBuffer[blockOffset] -= (1 << Al);
+                                        }
                                     }
                                 }
 
@@ -520,18 +497,22 @@ IDCT: class {
 
                                             const r = s >> 4, v = s & 15;
                                             if (v === 0) {
-                                                if (r < 15) {
+                                                if (r < 15) { // EOB
                                                     eob_run = (1 << r) + rv(r);
                                                     eob_run--;
                                                     if (Ah > 0) this._refineAC(coeffBuffer, blockOffset, ZZ, k, Se, Al, nb);
                                                     break;
-                                                } else {
+                                                } else { // ZRL
                                                     if (Ah === 0) k += 15;
                                                     else {
                                                         let z = 0;
-                                                        while(z<16 && k<=Se) {
+                                                        while(z < 16 && k <= Se) {
                                                             if (coeffBuffer[blockOffset + ZZ[k]] !== 0) {
-                                                                let b = nb(); if(b===1) { if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al); else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al); }
+                                                                let b = nb();
+                                                                if(b===1) {
+                                                                    if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al);
+                                                                    else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al);
+                                                                }
                                                             } else z++;
                                                             k++;
                                                         }
@@ -547,7 +528,11 @@ IDCT: class {
                                                     let z = 0;
                                                     while(z < r && k <= Se) {
                                                         if (coeffBuffer[blockOffset + ZZ[k]] !== 0) {
-                                                            let b = nb(); if(b===1) { if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al); else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al); }
+                                                            let b = nb();
+                                                            if(b===1) {
+                                                                if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al);
+                                                                else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al);
+                                                            }
                                                         } else z++;
                                                         k++;
                                                     }
@@ -566,11 +551,10 @@ IDCT: class {
                         }
                         if (markerFound) break;
                     }
-
-                    if (markerFound) pos = bp - 1;
-                    else pos = bp;
+                    if (markerFound) pos = bp - 1; else pos = bp;
 
                 } else if (marker === M.DHT) {
+                    // ... DHT Parsing (same as before) ...
                     const len = (d[pos + 1] << 8) | d[pos + 2];
                     let subPos = pos + 3, end = pos + 1 + len;
                     while (subPos < end) {
@@ -583,12 +567,8 @@ IDCT: class {
                         tables[tc][th] = mh(nr, val);
                     }
                     pos = end;
-                } else if (marker === M.EOI) {
-                    break;
-                } else {
-                    const len = (d[pos + 1] << 8) | d[pos + 2];
-                    pos += 1 + len;
-                }
+                } else if (marker === M.EOI) { break; }
+                else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
             }
 
             const allBlocks = [];
@@ -600,7 +580,6 @@ IDCT: class {
         },
 
         _refineAC: function(coeffBuffer, blockOffset, ZZ, k, Se, Al, nb) {
-            // Helper for AC Refinement during EOB run or ZRL
             for (; k <= Se; k++) {
                 const idx = blockOffset + ZZ[k];
                 if (coeffBuffer[idx] !== 0) {
@@ -613,7 +592,12 @@ IDCT: class {
             }
         },
 
+        // ... render function ...
         render: function(decoded, scale = 1.0) {
+           // (Keep your existing render function, it works fine)
+           // Just ensure you use the updated IDCT class above!
+           // ...
+           // [Include the render function code from previous steps here]
             let blockSize = 8;
             if (scale === 0.5) blockSize = 4; else if (scale === 0.25) blockSize = 2; else if (scale === 0.125) blockSize = 1;
 
@@ -633,7 +617,6 @@ IDCT: class {
             const defaultQ = { 0: ensureNatural(JpegCORE.Constants.QUANT_L), 1: ensureNatural(JpegCORE.Constants.QUANT_C) };
             const compToQT = {};
 
-            // Build Quant Table Map
             if (decoded.compMap) {
                 decoded.compMap.forEach(c => {
                     const t = decoded.quantTables[c.tq];
@@ -666,7 +649,6 @@ IDCT: class {
                             if (absX >= w || absY >= h) continue;
 
                             let Y = 0, Cb = 0, Cr = 0;
-                            // Nearest Neighbor Resampling for Chroma
                             for (let sb of spatialBlocks) {
                                 if (sb.def.t === 'Y') {
                                     const bxStart = sb.def.dx * blockSize, byStart = sb.def.dy * blockSize;
