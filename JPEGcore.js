@@ -1,6 +1,6 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.7.8  ( Forgiving DECODER / Robust Mode)
+* Extended Version 1.7.9  ( Forgiving DECODER / Robust Mode)
 * * CORES:
 * - Decoder: Fixed IDCT amplitude/saturation bug (v1.7.5), Robust Mode(v1.7.8)
 * - Encoder: ZigZag order fix for saving (v1.7.4), enfoceNewQuality (1.7.7)
@@ -224,7 +224,7 @@ const JpegCORE = {
         }
     },
 
-    // --- 3. DECODER (v1.7.8 - Forgiving / Robust Mode) ---
+    // --- 3. DECODER (v1.7.9 - Progressive Fix / Robust Mode) ---
     Decoder: {
         IDCT: class {
             constructor() {
@@ -278,8 +278,17 @@ const JpegCORE = {
                 const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG, SM = JpegCORE.Constants.SAMPLE_MODES;
                 const H = JpegCORE.Constants.HUFFMAN;
 
+                const readRawBits = (l) => {
+                    let v = 0;
+                    for (let i = 0; i < l; i++) {
+                        const b = nb();
+                        if (b === null) return 0; // Error handling
+                        v = (v << 1) | b;
+                    }
+                    return v;
+                };
+
                 // --- Robustheit 1: Header Check lockern ---
-                // Wir prüfen zwar, aber werfen nicht sofort, wenn wir später vielleicht noch Daten finden
                 if (d.length < 2) throw new Error("File too short");
 
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
@@ -366,11 +375,8 @@ const JpegCORE = {
                 }
 
                 // --- Fallback für Dimensionen ---
-                // Wenn SOF gefehlt hat (sehr kaputt), raten wir oder geben auf
                 if (!w || !h) {
                     console.warn("Forgiving Decoder: No dimensions found. Assuming corrupted header.");
-                    // Wenn wir gar keine Dimensionen haben, können wir nichts rendern.
-                    // Rückgabe eines leeren Dummys, um Crash zu verhindern.
                     return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
                 }
 
@@ -381,7 +387,6 @@ const JpegCORE = {
                 const rows = Math.ceil(h / (mcuStructure.vMax * 8));
                 const totalBlocks = cols * rows * blocksPerMCU;
 
-                // Wir initialisieren den Puffer mit 0. Blöcke, die durch Glitch nicht erreicht werden, bleiben grau/leer.
                 const coeffBuffer = new Int32Array(totalBlocks * 64);
 
                 let bp = pos;
@@ -410,13 +415,13 @@ const JpegCORE = {
                 const rh = (m) => {
                     let k = "";
                     let safety = 0;
-                    while (k.length < 16 && safety++ < 32) { // Infinite Loop Protection
+                    while (k.length < 16 && safety++ < 32) {
                         const b = nb();
                         if (b === 'MARKER' || b === 'RST' || b === null) return b;
                         k += b;
                         if (m[k] !== undefined) return m[k];
                     }
-                    return null; // Huffman Code not found (Glitch)
+                    return null;
                 };
 
                 const rv = (l) => {
@@ -434,8 +439,6 @@ const JpegCORE = {
                 let predDC = [0, 0, 0];
 
                 // --- Robustheit 3: Scan Loop in Try/Catch ---
-                // Hier passiert der Großteil der Magie. Wenn der Stream korrupt ist,
-                // fangen wir den Fehler, brechen ab, aber liefern coeffBuffer zurück.
                 try {
                     while (pos < d.length - 1) {
                         if (d[pos] !== 0xFF) { pos++; continue; }
@@ -446,7 +449,7 @@ const JpegCORE = {
                         if (marker === M.SOS) {
                             const len = (d[pos + 1] << 8) | d[pos + 2];
                             const sosEnd = pos + 1 + len;
-                            if (sosEnd > d.length) break; // SOS header broken
+                            if (sosEnd > d.length) break;
 
                             const ns = d[pos + 3];
                             const comps = [];
@@ -456,15 +459,19 @@ const JpegCORE = {
                                 const mapObj = compMapList.find(x => x.id === cs);
                                 if (mapObj) comps.push({ type: mapObj.type, dcTbl: (tdta >> 4) & 0xF, acTbl: tdta & 0xF });
                             }
-
-                            // Fallback falls comps leer sind (Glitch)
                             if (comps.length === 0) comps.push({type:0, dcTbl:0, acTbl:0});
 
                             const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
                             const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
 
                             bp = sosEnd; bb = 0; bc = 0;
+
+                            // --- PROGRESSIVE STATE VARIABLES ---
                             let eob_run = 0;
+                            let successiveACState = 0;
+                            let successiveACNextValue = 0;
+                            let acRun = 0; // Temp counter for zero skipping
+
                             if (Ss === 0) predDC = [0,0,0];
 
                             const typeToIndices = {};
@@ -484,23 +491,24 @@ const JpegCORE = {
 
                                     for (let bIdx of blkIndices) {
                                         const blockOffset = (m * blocksPerMCU + bIdx) * 64;
-                                        // Bounds Check: Verhindert Array Overflow bei korrupten Dimensionen
                                         if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
 
-                                        if (Ss === 0) { // DC
-                                            // Fallback table: Wenn Table ID falsch ist, nimm 0
+                                        // --- DC DECODING ---
+                                        if (Ss === 0) {
                                             const tbl = (tables[0][c.dcTbl]) ? tables[0][c.dcTbl] : tables[0][0];
-                                            if (!tbl) { markerFound = true; break; } // Kritischer Glitch
+                                            if (!tbl) { markerFound = true; break; }
 
                                             if (Ah === 0) {
+                                                // DC First
                                                 let s = rh(tbl);
-                                                if (s === 'RST') { predDC[c.type] = 0; bc = 0; eob_run = 0; s = rh(tbl); }
+                                                if (s === 'RST') { predDC[c.type] = 0; bc = 0; eob_run = 0; successiveACState = 0; s = rh(tbl); }
                                                 if (s === 'MARKER' || s === null) { markerFound = true; break; }
                                                 let diff = 0; if (s !== 0) diff = rv(s);
                                                 if (diff === null) { markerFound = true; break; }
                                                 predDC[c.type] += diff;
                                                 coeffBuffer[blockOffset] = predDC[c.type] << Al;
                                             } else {
+                                                // DC Refine
                                                 let bit = nb();
                                                 if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
                                                 if (bit === 1) {
@@ -510,74 +518,136 @@ const JpegCORE = {
                                             }
                                         }
 
-                                        if (Se > 0) { // AC
+                                        // --- AC DECODING ---
+                                        if (Se > 0) {
                                             const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
                                             if (!tbl) { markerFound = true; break; }
 
-                                            if (eob_run > 0) {
-                                                eob_run--;
-                                                if (Ah > 0) this._refineAC(coeffBuffer, blockOffset, ZZ, Ss, Se, Al, nb);
-                                            } else {
-                                                let k = Math.max(Ss, 1);
-                                                while (k <= Se) {
-                                                    let s = rh(tbl);
-                                                    if (s === 'RST') { bc=0; s = rh(tbl); }
-                                                    if (s === 'MARKER' || s === null) { markerFound = true; break; }
+                                            if (Ah === 0) {
+                                                // --- AC FIRST SCAN (Standard Huffman) ---
+                                                if (eob_run > 0) {
+                                                    eob_run--;
+                                                } else {
+                                                    let k = Math.max(Ss, 1);
+                                                    while (k <= Se) {
+                                                        let s = rh(tbl);
+                                                        if (s === 'RST') { bc=0; eob_run=0; s = rh(tbl); }
+                                                        if (s === 'MARKER' || s === null) { markerFound = true; break; }
 
-                                                    const r = s >> 4, v = s & 15;
-                                                    if (v === 0) {
-                                                        if (r < 15) { // EOB
-                                                            eob_run = (1 << r) + rv(r);
-                                                            if (eob_run === null) { eob_run=0; markerFound=true; break; }
-                                                            eob_run--;
-                                                            if (Ah > 0) this._refineAC(coeffBuffer, blockOffset, ZZ, k, Se, Al, nb);
-                                                            break;
-                                                        } else { // ZRL
-                                                            if (Ah === 0) k += 15;
-                                                            else {
-                                                                let z = 0;
-                                                                while(z < 16 && k <= Se) {
-                                                                    if (coeffBuffer[blockOffset + ZZ[k]] !== 0) {
-                                                                        let b = nb();
-                                                                        if (b === 'MARKER' || b === null) { markerFound = true; break; }
-                                                                        if(b===1) {
-                                                                            if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al);
-                                                                            else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al);
-                                                                        }
-                                                                    } else z++;
-                                                                    k++;
-                                                                }
-                                                                k--;
+                                                        const r = s >> 4, v = s & 15;
+                                                        if (v === 0) {
+                                                            if (r < 15) { // EOB
+                                                                eob_run = (1 << r) + readRawBits(r);
+                                                                if (eob_run === null) { eob_run=0; markerFound=true; break; }
+                                                                eob_run--;
+                                                                break;
+                                                            } else { // ZRL
+                                                                k += 15;
                                                             }
-                                                        }
-                                                    } else {
-                                                        if (Ah === 0) {
+                                                        } else {
                                                             k += r;
                                                             const val = rv(v);
                                                             if (val === null) { markerFound = true; break; }
                                                             if (k <= Se) coeffBuffer[blockOffset + ZZ[k]] = val << Al;
-                                                        } else {
-                                                            let z = 0;
-                                                            while(z < r && k <= Se) {
-                                                                if (coeffBuffer[blockOffset + ZZ[k]] !== 0) {
-                                                                    let b = nb();
-                                                                    if(b===1) {
-                                                                        if(coeffBuffer[blockOffset + ZZ[k]] > 0) coeffBuffer[blockOffset + ZZ[k]] += (1<<Al);
-                                                                        else coeffBuffer[blockOffset + ZZ[k]] -= (1<<Al);
-                                                                    }
-                                                                } else z++;
-                                                                k++;
-                                                            }
-                                                            const val = rv(v);
-                                                            if (val === null) { markerFound = true; break; }
-                                                            const idx = blockOffset + ZZ[k];
-                                                            if (k <= Se) coeffBuffer[idx] = (val < 0 ? -1 : 1) * (1 << Al);
                                                         }
+                                                        k++;
                                                     }
+                                                }
+
+                                            } else {
+                                                // --- AC SUCCESSIVE SCAN (Refine) - FIXED LOGIC ---
+                                                let k = Math.max(Ss, 1);
+                                                while (k <= Se) {
+                                                    const z = ZZ[k];
+                                                    const idx = blockOffset + z;
+                                                    const direction = coeffBuffer[idx] < 0 ? -1 : 1;
+
+                                                    switch (successiveACState) {
+                                                        case 0: // Initial State: Huffman lesen
+                                                            let rs = rh(tbl);
+                                                            if (rs === 'RST') { bc=0; eob_run=0; successiveACState=0; rs = rh(tbl); }
+                                                            if (rs === 'MARKER' || rs === null) { markerFound = true; break; }
+
+                                                            const s = rs & 15, r = rs >> 4;
+                                                            if (s === 0) {
+                                                                if (r < 15) { // EOB
+                                                                    eob_run = (1 << r) + readRawBits(r);
+                                                                    if (eob_run === null) { markerFound=true; break; }
+                                                                    successiveACState = 4;
+                                                                } else { // ZRL
+                                                                    acRun = 16;
+                                                                    successiveACState = 1;
+                                                                }
+                                                            } else {
+                                                                if (s !== 1) {
+                                                                    console.warn("Invalid AC encoding in Successive Scan");
+                                                                    markerFound = true; break;
+                                                                }
+                                                                successiveACNextValue = rv(s); // -1 oder 1
+                                                                if (successiveACNextValue === null) { markerFound=true; break; }
+                                                                successiveACState = (r > 0) ? 2 : 3;
+                                                                acRun = r;
+                                                            }
+                                                            continue; // Wichtig: k noch nicht erhöhen, wir verarbeiten erst den State!
+
+                                                        case 1: // Skipping ZRL (Zero Run Length)
+                                                        case 2: // Skipping r Zeroes
+                                                            if (coeffBuffer[idx] !== 0) {
+                                                                // REFINE existierenden Wert
+                                                                let bit = nb();
+                                                                if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
+                                                                if (bit === 1) {
+                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                    else coeffBuffer[idx] -= (1 << Al);
+                                                                }
+                                                            } else {
+                                                                // Echte Null überspringen
+                                                                acRun--;
+                                                                if (acRun === 0) {
+                                                                    successiveACState = (successiveACState === 2) ? 3 : 0;
+                                                                }
+                                                            }
+                                                            break;
+
+                                                        case 3: // Set Value (nach Skips)
+                                                            if (coeffBuffer[idx] !== 0) {
+                                                                // REFINE existierenden Wert
+                                                                let bit = nb();
+                                                                if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
+                                                                if (bit === 1) {
+                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                    else coeffBuffer[idx] -= (1 << Al);
+                                                                }
+                                                            } else {
+                                                                // Neuen Wert setzen
+                                                                coeffBuffer[idx] = successiveACNextValue << Al;
+                                                                successiveACState = 0;
+                                                            }
+                                                            break;
+
+                                                        case 4: // EOB Run (Rest des Blocks)
+                                                            if (coeffBuffer[idx] !== 0) {
+                                                                // REFINE existierenden Wert auch während EOB!
+                                                                let bit = nb();
+                                                                if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
+                                                                if (bit === 1) {
+                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                    else coeffBuffer[idx] -= (1 << Al);
+                                                                }
+                                                            }
+                                                            break;
+                                                    }
+                                                    if (markerFound) break;
                                                     k++;
                                                 }
+
+                                                // Ende des Blocks erreicht -> EOB Run verwalten
+                                                if (successiveACState === 4) {
+                                                    eob_run--;
+                                                    if (eob_run === 0) successiveACState = 0;
+                                                }
                                             }
-                                        }
+                                        } // End AC Decoding
                                         if (markerFound) break;
                                     }
                                     if (markerFound) break;
@@ -588,7 +658,7 @@ const JpegCORE = {
 
                         } else if (marker === M.DHT) {
                             const len = (d[pos + 1] << 8) | d[pos + 2];
-                            if (pos + 1 + len > d.length) break; // DHT length error
+                            if (pos + 1 + len > d.length) break;
                             let subPos = pos + 3, end = pos + 1 + len;
                             while (subPos < end) {
                                 const info = d[subPos++];
@@ -610,7 +680,6 @@ const JpegCORE = {
                     console.warn("Forgiving Decoder caught error (rendering partial):", e);
                 }
 
-                // Daten zusammenpacken, auch wenn es weniger sind als totalBlocks
                 const allBlocks = [];
                 for (let i = 0; i < totalBlocks; i++) {
                     const off = i * 64, bTypeIndex = i % blocksPerMCU, bDef = mcuStructure.blocks[bTypeIndex], isChroma = bDef.t === 'C';
@@ -625,28 +694,14 @@ const JpegCORE = {
             }
         },
 
-        _refineAC: function(coeffBuffer, blockOffset, ZZ, k, Se, Al, nb) {
-            for (; k <= Se; k++) {
-                const idx = blockOffset + ZZ[k];
-                if (coeffBuffer[idx] !== 0) {
-                    let b = nb();
-                    if (b === 1) {
-                        if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
-                        else coeffBuffer[idx] -= (1 << Al);
-                    }
-                }
-            }
-        },
-
         render: function(decoded, scale = 1.0) {
-            if (!decoded || !decoded.blocks || decoded.blocks.length === 0) return new ImageData(1, 1); // Safety return
+            if (!decoded || !decoded.blocks || decoded.blocks.length === 0) return new ImageData(1, 1);
 
             let blockSize = 8;
             if (scale === 0.5) blockSize = 4; else if (scale === 0.25) blockSize = 2; else if (scale === 0.125) blockSize = 1;
 
             const w = Math.ceil(decoded.w * scale), h = Math.ceil(decoded.h * scale);
             const mode = decoded.mode || '420', blocks = decoded.blocks;
-            // Falls Dimensionen durch Glitch riesig sind, begrenzen (Browser Crash Schutz)
             if (w > 16000 || h > 16000) throw new Error("Image too large (Glitch detected)");
 
             const finalData = new Uint8ClampedArray(w * h * 4);
@@ -656,7 +711,7 @@ const JpegCORE = {
 
             const ensureNatural = (zzTbl) => {
                 const n = new Uint8Array(64);
-                if (!zzTbl) return n; // Safety
+                if (!zzTbl) return n;
                 for (let i = 0; i < 64; i++) n[ZZ[i]] = zzTbl[i];
                 return n;
             };
@@ -682,16 +737,10 @@ const JpegCORE = {
                 for (let c = 0; c < cols; c++) {
                     const spatialBlocks = [];
                     for (let b = 0; b < blocksPerMCU; b++) {
-                        // ROBUSTHEIT: Wenn Blöcke fehlen (EOF), füllen wir mit leeren (grauen) Daten auf
                         let rawBlock = { data: new Int32Array(64), comp: 0, type: 'Y' };
                         if (bIdx < blocks.length) {
                              rawBlock = blocks[bIdx++];
-                        } else {
-                            // Optional: Wiederhole letzten Block für "Smear"-Effekt statt Grau
-                             // rawBlock = blocks[blocks.length-1];
                         }
-
-                        // Safety Check für type
                         if (!rawBlock.type) rawBlock.type = SM.blocks[b].t;
 
                         spatialBlocks.push({
