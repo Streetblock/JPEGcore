@@ -117,6 +117,11 @@ const JpegCORE = {
 
                     // JPEG-Marker-Logik: 0xFF leitet immer etwas Besonderes ein
                     if (b === 0xFF) {
+                        // Optional fill bytes (0xFF) may precede a marker at scan boundaries.
+                        // Consume them so marker handling remains aligned.
+                        while (this._pos < this.d.length && this.d[this._pos] === 0xFF) {
+                            this._pos++;
+                        }
                         if (this._pos >= this.d.length) return null;
                         let next = this.d[this._pos];
 
