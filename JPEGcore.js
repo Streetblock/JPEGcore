@@ -4,6 +4,7 @@
 * * Features:
 * - Encode (RGB -> JPEG)
 * - Decode (JPEG -> RGB via render)
+* - Scale-on-Load Decode (Fast thumbnails 1/2, 1/4, 1/8 size)
 * - Lossless Transforms (Rotate, Flip without re-compression)
 * - EXIF Parsing (Orientation detection)
  */
@@ -236,30 +237,49 @@ const JpegCORE = {
 
     // --- 3. DECODER ---
     Decoder: {
-        // Corrected IDCT Class
+        // Corrected IDCT Class with Scaling Support
         IDCT: class {
             constructor() {
-                this.base = [];
-                for (let u = 0; u < 8; u++) {
-                    this.base[u] = [];
-                    for (let x = 0; x < 8; x++) {
-                        let Cu = (u === 0) ? 1 / Math.sqrt(2) : 1;
-                        this.base[u][x] = Cu * Math.cos(((2 * x + 1) * u * Math.PI) / 16);
+                this.bases = {};
+                // Precompute cosine tables for 8x8, 4x4, 2x2, 1x1
+                [1, 2, 4, 8].forEach(size => {
+                    this.bases[size] = [];
+                    for (let u = 0; u < size; u++) {
+                        this.bases[size][u] = [];
+                        for (let x = 0; x < size; x++) {
+                            // Normalized IDCT Basis for size N
+                            // Frequency u matches 0..N-1
+                            let Cu = (u === 0) ? 1 / Math.sqrt(2) : 1;
+                            this.bases[size][u][x] = Cu * Math.cos(((2 * x + 1) * u * Math.PI) / (2 * size));
+                        }
                     }
-                }
+                });
             }
-            transform(coeffs, quantTable) {
-                const out = new Float32Array(64);
-                for (let y = 0; y < 8; y++) {
-                    for (let x = 0; x < 8; x++) {
+
+            transform(coeffs, quantTable, outSize = 8) {
+                // outSize: 8 (Full), 4 (Half), 2 (Quarter), 1 (Eighth)
+                if (!this.bases[outSize]) throw new Error("Invalid IDCT scale");
+                const base = this.bases[outSize];
+                const out = new Float32Array(outSize * outSize);
+
+                // Scaling factor for IDCT normalization (2/N)
+                // For N=8 (Standard), factor is 0.25 (2/8)
+                const normFactor = 2 / outSize;
+
+                for (let y = 0; y < outSize; y++) {
+                    for (let x = 0; x < outSize; x++) {
                         let sum = 0;
-                        for (let u = 0; u < 8; u++) {
-                            for (let v = 0; v < 8; v++) {
+                        for (let u = 0; u < outSize; u++) {
+                            for (let v = 0; v < outSize; v++) {
+                                // 1. De-Quantize (using original 8x8 table indices)
+                                // We strictly use the top-left NxN coefficients (low frequencies)
                                 const coefVal = coeffs[u * 8 + v] * quantTable[u * 8 + v];
-                                sum += coefVal * this.base[u][x] * this.base[v][y];
+
+                                // 2. IDCT Formula with precomputed basis for size N
+                                sum += coefVal * base[u][x] * base[v][y];
                             }
                         }
-                        out[y * 8 + x] = sum * 0.25;
+                        out[y * outSize + x] = sum * normFactor;
                     }
                 }
                 return out;
@@ -354,9 +374,17 @@ const JpegCORE = {
             return { blocks: allBlocks, w, h, mode: finalMode };
         },
 
-        render: function(decoded) {
-            const w = decoded.w;
-            const h = decoded.h;
+        render: function(decoded, scale = 1.0) {
+            // Map scale to supported block sizes: 8, 4, 2, 1
+            // 1.0 -> 8x8, 0.5 -> 4x4, 0.25 -> 2x2, 0.125 -> 1x1
+            let blockSize = 8;
+            if (scale === 0.5) blockSize = 4;
+            else if (scale === 0.25) blockSize = 2;
+            else if (scale === 0.125) blockSize = 1;
+            else scale = 1.0; // Default fallback
+
+            const w = Math.ceil(decoded.w * scale);
+            const h = Math.ceil(decoded.h * scale);
             const mode = decoded.mode;
             const blocks = decoded.blocks;
 
@@ -366,8 +394,13 @@ const JpegCORE = {
             const Q_L = JpegCORE.Constants.QUANT_L;
             const Q_C = JpegCORE.Constants.QUANT_C;
 
-            const mcuW = SM.hMax * 8;
-            const mcuH = SM.vMax * 8;
+            // Calculate MCU dimensions based on Scaled Block Size
+            const mcuW = SM.hMax * blockSize;
+            const mcuH = SM.vMax * blockSize;
+
+            // Note: Cols/Rows logic remains based on ORIGINAL image structure for looping
+            // We just render smaller pixels per block.
+            // w / mcuW works because both w and mcuW are scaled by same factor.
             const cols = Math.ceil(w / mcuW);
             const rows = Math.ceil(h / mcuH);
             const blocksPerMCU = SM.blocks.length;
@@ -381,35 +414,42 @@ const JpegCORE = {
                         const rawBlock = blocks[bIdx++];
                         const qTable = (rawBlock.type === 'C') ? Q_C : Q_L;
                         spatialBlocks.push({
-                            pixels: idctEngine.transform(rawBlock.data, qTable),
+                            // Pass blockSize to IDCT to perform scaled transform
+                            pixels: idctEngine.transform(rawBlock.data, qTable, blockSize),
                             def: SM.blocks[b]
                         });
                     }
                     const originX = c * mcuW;
                     const originY = r * mcuH;
+
+                    // Loop over the SCALED MCU pixels
                     for (let y = 0; y < mcuH; y++) {
                         for (let x = 0; x < mcuW; x++) {
                             const absX = originX + x;
                             const absY = originY + y;
                             if (absX >= w || absY >= h) continue;
+
                             let Y = 0, Cb = 0, Cr = 0;
+                            // 1. Fetch Y
                             for (let sb of spatialBlocks) {
                                 if (sb.def.t === 'Y') {
-                                    const bxStart = sb.def.dx * 8;
-                                    const byStart = sb.def.dy * 8;
-                                    if (x >= bxStart && x < bxStart + 8 && y >= byStart && y < byStart + 8) {
-                                        Y = sb.pixels[(y - byStart) * 8 + (x - bxStart)];
+                                    // Block offsets are also scaled
+                                    const bxStart = sb.def.dx * blockSize;
+                                    const byStart = sb.def.dy * blockSize;
+                                    if (x >= bxStart && x < bxStart + blockSize && y >= byStart && y < byStart + blockSize) {
+                                        Y = sb.pixels[(y - byStart) * blockSize + (x - bxStart)];
                                         break;
                                     }
                                 }
                             }
+                            // 2. Fetch Chroma
                             for (let sb of spatialBlocks) {
                                 if (sb.def.t === 'C') {
                                     const scaleX = SM.hMax; const scaleY = SM.vMax;
                                     const cx = Math.floor(x / scaleX);
                                     const cy = Math.floor(y / scaleY);
-                                    if (cx < 8 && cy < 8) {
-                                        const val = sb.pixels[cy * 8 + cx];
+                                    if (cx < blockSize && cy < blockSize) {
+                                        const val = sb.pixels[cy * blockSize + cx];
                                         if (sb.def.c === 0) Cb = val; else Cr = val;
                                     }
                                 }
