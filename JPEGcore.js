@@ -1,10 +1,10 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.7.6 (New Glitch Features)
+* Extended Version 1.7.7 (better Encoder)
 * * CORES:
 * - Decoder: Fixed IDCT amplitude/saturation bug (v1.7.5)
 * - Encoder: ZigZag order fix for saving (v1.7.4)
-* * * Features:
+* * * Features  1.7.6:
 * - NEW: Quantization Crush (Deep Fry effect)
 * - NEW: Chromatic Aberration (Channel shifting)
 * - Standard: Encode, Decode (Scale-on-Load), Transform, Analysis
@@ -874,7 +874,7 @@ const JpegCORE = {
         }
     },
 
-    // --- 6. ENCODER ---
+    // --- 6. ENCODER (v1.7.7 - Added forceNewQuality) ---
     Encoder: class {
         constructor(quality, customL, customC) {
             const C = JpegCORE.Constants;
@@ -953,7 +953,7 @@ const JpegCORE = {
             return { blocks: allBlocks, w, h, mode };
         }
 
-        save(captured, metaSegments) {
+        save(captured, metaSegments, forceNewQuality = false) {
             this.buf = []; this.byte = 0; this.cnt = 0;
             const M = JpegCORE.Constants.MARKERS;
             const wr = (v) => { this.buf.push((v >> 8) & 0xFF, v & 0xFF); }, wb = (v) => { this.buf.push(v); };
@@ -962,7 +962,9 @@ const JpegCORE = {
             const w = captured.w, h = captured.h;
 
             let qY = this.tY, qC = this.tC;
-            if (captured.quantTables) {
+
+            // Only use original tables if NOT forced to use new quality
+            if (!forceNewQuality && captured.quantTables) {
                 if(captured.quantTables[0]) qY = captured.quantTables[0];
                 if(captured.quantTables[1]) qC = captured.quantTables[1];
             }
