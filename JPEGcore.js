@@ -788,7 +788,8 @@ const JpegCORE = {
                                     mode: 'RGBA_NATIVE',
                                     quantTables: {},
                                     compMap: [],
-                                    isProgressiveFallback: true
+                                    isProgressiveFallback: true,
+                                    decodeBackend: 'native'
                                 };
                             }
                         } catch (nativeDecodeErr) {
@@ -809,7 +810,8 @@ const JpegCORE = {
                             mode: 'RGBA_FALLBACK',
                             quantTables: {},
                             compMap: [],
-                            isProgressiveFallback: true
+                            isProgressiveFallback: true,
+                            decodeBackend: 'jpegjs'
                         };
                     }
                 }                // --- Setup Buffer ---
@@ -1047,7 +1049,7 @@ const JpegCORE = {
                     }
                 } catch (e) { console.warn("Robust Decode Warning:", e); }
 
-                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList };
+                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, decodeBackend: 'internal' };
 
             } catch (globalErr) {
                 console.error("Critical Decoder Failure:", globalErr);
