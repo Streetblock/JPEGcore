@@ -108,11 +108,17 @@ const JpegCORE = {
                 const segmentEnd = pos + 1 + len;
 
                 if (marker === M.SOF0 || marker === M.SOF2) {
+                    // Fix: Corrected Offsets for SOF marker
+                    // Pos points to Marker (C0/C2)
+                    // C0 Lh Ll P H H W W Nf
+                    // 0  1  2  3 4 5 6 7 8
                     h = (d[pos + 4] << 8) | d[pos + 5];
                     w = (d[pos + 6] << 8) | d[pos + 7];
                     const numComps = d[pos + 8];
                     let compMapList = [];
-                    for (let i = 0; i < numComps; i++) compMapList.push({ samp: d[pos + 11 + (i * 3)] });
+                    // Component Struct: [ID, Samp, QT] (3 bytes)
+                    // Starts at pos + 9
+                    for (let i = 0; i < numComps; i++) compMapList.push({ samp: d[pos + 10 + (i * 3)] });
                     if (numComps === 1) mcuStructure = SM['GRAY'];
                     else {
                         const ySamp = compMapList[0].samp;
@@ -318,14 +324,23 @@ const JpegCORE = {
 
                 const len = (d[pos + 1] << 8) | d[pos + 2], end = pos + 1 + len;
                 if (marker === M.SOF0 || marker === M.SOF2) {
-                    h = (d[pos + 4] << 8) | d[pos + 5]; w = (d[pos + 6] << 8) | d[pos + 7];
-                    const numComps = d[pos + 8]; compMapList = [];
+                    // Corrected Offsets for SOF marker:
+                    // FF C0 Lh Ll P H H W W Nf
+                    // 0  1  2  3  4 5 6 7 8 9
+                    // But 'pos' points to C0 (Marker).
+                    // C0 Lh Ll P H H W W Nf
+                    // 0  1  2  3 4 5 6 7 8
+
+                    h = (d[pos + 4] << 8) | d[pos + 5];
+                    w = (d[pos + 6] << 8) | d[pos + 7];
+                    const numComps = d[pos + 8];
+                    compMapList = [];
                     for (let i = 0; i < numComps; i++) {
                          compMapList.push({
-                            id: d[pos + 10 + (i * 3)],
+                            id: d[pos + 9 + (i * 3)],
                             type: (i === 0) ? 0 : (i === 1 ? 1 : 2),
-                            samp: d[pos + 11 + (i * 3)],
-                            tq: d[pos + 12 + (i * 3)] // Capture Quant Table Selector
+                            samp: d[pos + 10 + (i * 3)],
+                            tq: d[pos + 11 + (i * 3)] // Capture Quant Table Selector
                          });
                     }
                     if (numComps === 1) { finalMode = 'GRAY'; mcuStructure = SM['GRAY']; }
@@ -367,9 +382,6 @@ const JpegCORE = {
             let scanCount = 0;
 
             // FIX: Ensure we didn't overshoot the SOS marker in the previous loop.
-            // The first loop breaks when d[pos] == SOS (Marker Byte).
-            // But the next loop expects to start scanning from 0xFF.
-            // We step back one byte to ensure the next loop sees the 0xFF before the SOS.
             if (d[pos-1] === 0xFF) pos--;
 
             // 4. Multi-Scan Loop (For Progressive JPEG)
