@@ -291,9 +291,18 @@ const JpegCORE = {
             const buf = await file.arrayBuffer();
             const d = new Uint8Array(buf);
             const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG, SM = JpegCORE.Constants.SAMPLE_MODES;
-            let pos = 2, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [], tables = { 0: {}, 1: {} };
-            const quantTables = {}; // Store extracted DQTs
+            const H = JpegCORE.Constants.HUFFMAN;
+            let pos = 2, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
+
             const mh = (L, V) => { let t = {}, c = 0, p = 0; for (let i = 1; i <= 16; i++) { for (let j = 0; j < L[i - 1]; j++) { let k = ""; for (let x = i - 1; x >= 0; x--)k += (c >> x) & 1; t[k] = V[p++]; c++; } c <<= 1; } return t; };
+
+            // Initialize tables with Standard JPEG Huffman Tables (Fallback for missing DHTs)
+            let tables = {
+                0: { 0: mh(H.DC_L_NR, H.DC_L_VAL), 1: mh(H.DC_C_NR, H.DC_C_VAL) },
+                1: { 0: mh(H.AC_L_NR, H.AC_L_VAL), 1: mh(H.AC_C_NR, H.AC_C_VAL) }
+            };
+
+            const quantTables = {}; // Store extracted DQTs
 
             if (d[0] !== 0xFF || d[1] !== M.SOI) throw new Error("Not a JPEG");
 
@@ -373,7 +382,11 @@ const JpegCORE = {
                     const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1], Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
 
                     // LOGGING THE SCAN DETAILS
-                    console.log(`[JpegCORE] Processing Scan #${scanCount} (Ss:${Ss}, Se:${Se}, Ah:${Ah}, Al:${Al})`);
+                    if (scanCount === 1 && Ss === 0 && Se === 63) {
+                        console.log(`[JpegCORE] Baseline JPEG detected (Scan #1 covers all coefficients)`);
+                    } else {
+                        console.log(`[JpegCORE] Progressive Scan #${scanCount} (Ss:${Ss}, Se:${Se}, Ah:${Ah}, Al:${Al})`);
+                    }
 
                     // Sync bit reader to start of entropy segment
                     bp = sosEnd; bb = 0; bc = 0;
