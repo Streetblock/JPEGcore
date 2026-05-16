@@ -1,8 +1,8 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.8.3 JIT Turbo
+* Extended Version 1.9.0 Refactor with Utils
 * * CORES:
-* - Decoder: Added Loeffler Integer IDCT (Standard), Naive IDCT (Legacy/Reference),
+* - Decoder:  1.8.3 JIT Turbo Added Loeffler Integer IDCT (Standard), Naive IDCT (Legacy/Reference),
 * Fixed IDCT amplitude/saturation bug (v1.7.5), Robust Mode(v1.7.8)
 * - Encoder: ZigZag order fix for saving (v1.7.4), enfoceNewQuality (1.7.7)
 * * * Features  1.7.6:
@@ -38,6 +38,173 @@ const JpegCORE = {
             '444': { hMax: 1, vMax: 1, blocks: [{ t: 'Y', dx: 0, dy: 0 }, { t: 'C', dx: 0, dy: 0, c: 0 }, { t: 'C', dx: 0, dy: 0, c: 1 }] },
             '422': { hMax: 2, vMax: 1, blocks: [{ t: 'Y', dx: 0, dy: 0 }, { t: 'Y', dx: 1, dy: 0 }, { t: 'C', dx: 0, dy: 0, c: 0 }, { t: 'C', dx: 0, dy: 0, c: 1 }] },
             '420': { hMax: 2, vMax: 2, blocks: [{ t: 'Y', dx: 0, dy: 0 }, { t: 'Y', dx: 1, dy: 0 }, { t: 'Y', dx: 0, dy: 1 }, { t: 'Y', dx: 1, dy: 1 }, { t: 'C', dx: 0, dy: 0, c: 0 }, { t: 'C', dx: 0, dy: 0, c: 1 }] }
+        },
+
+        MAX_DIMENSION: 10000
+    },
+
+    Utils: {
+
+        // --- 1. HUFFMAN TREE GENERATOR ---
+        // Konvertiert die JPEG-Standard-Tabellenform in einen navigierbaren binären Baum.
+        makeHuffmanTree: function(L, V) {
+            const root = [];
+            let c = 0, p = 0;
+            for (let i = 1; i <= 16; i++) {
+                for (let j = 0; j < L[i - 1]; j++) {
+                    let curr = root;
+                    for (let x = i - 1; x >= 0; x--) {
+                        const bit = (c >> x) & 1;
+                        if (x === 0) {
+                            if (p < V.length) curr[bit] = V[p++];
+                        } else {
+                            if (curr[bit] === undefined) curr[bit] = [];
+                            curr = curr[bit];
+                        }
+                    }
+                    c++;
+                }
+                c <<= 1;
+            }
+            return root;
+        },
+
+        // --- 2. BIT READER KLASSE ---
+        /**
+         * BitReader - Spezialisierte Klasse zum bitweisen Lesen des JPEG-Datenstroms.
+         * * Diese Klasse ist entscheidend für die Vermeidung des "Grau-Bild-Bugs".
+         * Er entsteht, wenn der Decoder über Marker (wie 0xFF 0xD9) hinausliest
+         * und Müll-Daten als Bildinformationen interpretiert.
+         */
+        BitReader: class {
+            constructor(data, startPos= 0) {
+                this.d = data;           // Das Uint8Array des gesamten JPEG-Files
+                this._pos = startPos;     // Aktuelle Byte-Position im Array
+                this.bitBuffer = 0;      // Zwischenspeicher für das aktuelle Byte
+                this.bitCount = 0;       // Anzahl der noch verfügbaren Bits im Buffer
+
+                // Status-Codes zur Signalisierung von Stream-Ereignissen
+                this.STAT_MARKER = -1;   // Ein unerwarteter Marker unterbricht den Datenstrom
+                this.STAT_RST = -2;      // Ein Restart-Marker wurde gefunden (für Fehlerkorrektur)
+            }
+
+            // Getter: Liefert die aktuelle Byte-Position
+            get pos() {
+                return this._pos;
+            }
+
+            // Setter: Setzt die Position UND leert automatisch den Puffer
+            set pos(newPos) {
+                this._pos = newPos;
+                this.bitBuffer = 0; // WICHTIG: Puffer leeren
+                this.bitCount = 0;  // WICHTIG: Bit-Zähler zurücksetzen
+            }
+
+            /**
+             * Holt das nächste Bit. Behandelt das JPEG "Byte-Stuffing".
+             * JPEG wandelt 0xFF in den Bilddaten zu 0xFF 0x00 um, damit es nicht mit Markern verwechselt wird.
+             */
+            nextBit() {
+                if (this.bitCount === 0) {
+                    if (this._pos >= this.d.length) return null; // Stream-Ende erreicht
+
+                    let b = this.d[this._pos++];
+
+                    // JPEG-Marker-Logik: 0xFF leitet immer etwas Besonderes ein
+                    if (b === 0xFF) {
+                        if (this._pos >= this.d.length) return null;
+                        let next = this.d[this._pos];
+
+                        if (next === 0) {
+                            // 0xFF 0x00: Ein echtes 0xFF-Datenbyte, das "gestopft" wurde.
+                            this._pos++; // Überspringe die 0x00
+                        } else if (next >= 0xD0 && next <= 0xD7) {
+                            // Restart-Marker (RST0-RST7): Erlaubt Dekodier-Resets.
+                            this._pos++;
+                            return this.STAT_RST; // Signalisiere Reset
+                        } else if (next === 0xD9) {
+                            // EOI (End of Image): Bild ist hier zu Ende.
+                            return null;
+                        } else {
+                            // Jeder andere Marker (z.B. neuer Scan oder Fehler)
+                            return this.STAT_MARKER;
+                        }
+                    }
+                    this.bitBuffer = b;
+                    this.bitCount = 8;
+                }
+
+                // Extrahiere das höchstwertige Bit (MSB) und schiebe den Puffer weiter
+                const bit = (this.bitBuffer >> (this.bitCount - 1)) & 1;
+                this.bitCount--;
+                return bit;
+            }
+
+            /**
+             * Liest eine Sequenz von Bits und gibt sie als Ganzzahl zurück.
+             * WICHTIG: Reicht Status-Codes (-1, -2) sofort nach oben durch.
+             */
+            readRaw(length) {
+                let v = 0;
+                for (let i = 0; i < length; i++) {
+                    const b = this.nextBit();
+                    // Wenn ein Status-Code oder null kommt, brechen wir sofort ab
+                    if (b === null || b < 0) return b;
+                    v = (v << 1) | b;
+                }
+                return v;
+            }
+
+            /**
+             * Dekodiert JPEG-spezifische vorzeichenbehaftete Differenzwerte.
+             * JPEG nutzt eine spezielle Kodierung: Wenn das erste Bit 0 ist, ist die Zahl negativ.
+             */
+            readSigned(length) {
+                if (length === 0) return 0;
+                let v = this.readRaw(length);
+
+                // Status-Check: Verhindert, dass -1 (Marker) als Bilddatum interpretiert wird
+                if (v === null || v < 0) return null;
+
+                // Umrechnung nach JPEG-Standard (Successive Approximation/Baseline)
+                // Formel: $$v < 2^{length-1} \implies v + (-1 \ll length) + 1$$
+                if (v < (1 << (length - 1))) {
+                    return v + (-1 << length) + 1;
+                }
+                return v;
+            }
+
+            /**
+             * Navigiert durch den Huffman-Baum basierend auf dem Bitstream.
+             * Jetzt mit Sicherheits-Stopp bei korrupten Bäumen.
+             */
+            readHuffman(node) {
+                let curr = node;
+                let safety = 0;
+
+                while (safety < 32) { // Sicherheitslimit hinzugefügt
+                    safety++;
+                    const b = this.nextBit();
+
+                    // Status-Codes (-1, -2) oder Stream-Ende (null) sofort zurückgeben
+                    if (b === null || b < 0) return b;
+
+                    curr = curr[b];
+
+                    if (typeof curr === 'number') return curr; // Symbol gefunden
+                    if (curr === undefined) return null; // Pfad im Baum existiert nicht
+                }
+
+                return null; // Sicherheits-Stopp: Code zu lang oder Baum zirkulär
+            }
+
+            /**
+             * Leert den Bit-Puffer. Notwendig nach Markern oder Resets.
+             */
+            reset() {
+                this.bitCount = 0;
+                this.bitBuffer = 0;
+            }
         }
     },
 
@@ -408,19 +575,41 @@ const JpegCORE = {
         },
 
         // --- 2. HYBRID DECODER (Final Fix: RST + Progressive EOB Refinement) ---
+
         extractBlocksStruct: async function(file) {
             try {
                 const buf = await file.arrayBuffer();
                 const d = new Uint8Array(buf);
                 const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG, SM = JpegCORE.Constants.SAMPLE_MODES;
                 const H = JpegCORE.Constants.HUFFMAN;
+                const MAX_DIMENSION =  JpegCORE.Constants.MAX_DIMENSION;
+
+                // Wir nutzen die neuen Utility-Funktionen
+                const utils = JpegCORE.Utils;
+                const makeTree = utils.makeHuffmanTree;
 
                 // STATUS CODES
                 const STAT_MARKER = -1;
                 const STAT_RST = -2;
 
+                // --- Robust Bit Reader Instanz ---
+                // Wir erstellen den Reader. Er bekommt das Daten-Array 'd'.
+                // WICHTIG: Wir übergeben 'pos' erst dann, wenn der eigentliche Scan beginnt,
+                // oder wir initialisieren ihn hier mit 0 und setzen die Position später.
+                const reader = new JpegCORE.Utils.BitReader(d, 0);
+
+
+                // Wir binden 'nb' einfach an die Methode der Klasse.
+                // So muss der restliche Code (rh, rv, readRawBits) noch nicht geändert werden.
+                const nb = () => reader.nextBit();
+
+                // Die Hilfsfunktionen nutzen nun intern den 'reader' über 'nb'
+                const readRawBits = (l) => reader.readRaw(l);
+                const rh = (node) => reader.readHuffman(node);
+                const rv = (l) => reader.readSigned(l);//*/
+
                 // --- Robust Bit Reader ---
-                let bp = 0, bb = 0, bc = 0;
+                /*let bp = 0, bb = 0, bc = 0;
                 const nb = () => {
                     if (bc === 0) {
                         if (bp >= d.length) return null;
@@ -471,9 +660,10 @@ const JpegCORE = {
                         v = (v << 1) | b;
                     }
                     return v < (1 << (l - 1)) ? v + (-1 << l) + 1 : v;
-                };
+                };//*/
 
-                const mh = (L, V) => {
+                //erstezt durch makeHuffman
+                /*const mh = (L, V) => {
                     const root = [];
                     let c = 0, p = 0;
                     for (let i = 1; i <= 16; i++) {
@@ -493,12 +683,12 @@ const JpegCORE = {
                         c <<= 1;
                     }
                     return root;
-                };
+                };//*/
 
                 // --- Parser Header ---
                 if (d.length < 2) throw new Error("File too short");
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
-                let tables = { 0: { 0: mh(H.DC_L_NR, H.DC_L_VAL), 1: mh(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: mh(H.AC_L_NR, H.AC_L_VAL), 1: mh(H.AC_C_NR, H.AC_C_VAL) } };
+                let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
 
                 if (d[0] === 0xFF && d[1] === M.SOI) pos = 2;
@@ -547,7 +737,7 @@ const JpegCORE = {
                             let count = 0; for (let c of nr) count += c;
                             const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
                             if (!tables[tc]) tables[tc] = {};
-                            tables[tc][th] = mh(nr, val);
+                            tables[tc][th] = makeTree(nr, val);
                         }
                     } else if (marker === M.DQT) {
                         let subPos = pos + 3;
@@ -563,7 +753,9 @@ const JpegCORE = {
                 }
 
                 if (!w || !h || !mcuStructure) return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
-
+                if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
+                    throw new Error(`Bildmaße zu groß: ${w}x${h}`);
+                }
                 // --- Setup Buffer ---
                 const blocksPerMCU = mcuStructure.blocks.length;
                 const cols = Math.ceil(w / (mcuStructure.hMax * 8));
@@ -610,7 +802,8 @@ const JpegCORE = {
                             const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
                             const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
 
-                            bp = sosEnd; bb = 0; bc = 0;
+                            // WICHTIG: BitReader auf den Start der Bilddaten setzen
+                            reader.pos= sosEnd;
                             let eob_run = 0;
                             let successiveACState = 0;
                             let successiveACNextValue = 0;
@@ -627,50 +820,38 @@ const JpegCORE = {
 
                             let markerFound = false;
 
+                            // --- Haupt-MCU Loop ---
                             for (let m = 0; m < cols * rows; m++) {
                                 for (let c of comps) {
                                     const blkIndices = typeToIndices[c.type];
                                     if (!blkIndices) continue;
 
                                     for (let bIdx of blkIndices) {
-                                        if (successiveACState === 0 && eob_run === 0) acRun = 0;
-
                                         const blockOffset = (m * blocksPerMCU + bIdx) * 64;
                                         if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
 
                                         // --- DC SCAN ---
                                         if (Ss === 0) {
                                             const tbl = (tables[0][c.dcTbl]) ? tables[0][c.dcTbl] : tables[0][0];
-                                            if (!tbl) { markerFound = true; break; }
-
                                             if (Ah === 0) {
                                                 let s = rh(tbl);
-                                                // FIX: RST Handling Complete Reset
-                                                if (s === STAT_RST) {
-                                                    predDC = [0, 0, 0];
-                                                    bc = 0; eob_run = 0; successiveACState = 0;
-                                                    s = rh(tbl);
-                                                }
+                                                if (s === STAT_RST) { predDC = [0,0,0]; s = rh(tbl); }
                                                 if (s === STAT_MARKER || s === null) { markerFound = true; break; }
-
-                                                let diff = 0; if (s !== 0) diff = rv(s);
+                                                let diff = (s === 0) ? 0 : rv(s);
                                                 if (diff === null) { markerFound = true; break; }
                                                 predDC[c.type] += diff;
                                                 coeffBuffer[blockOffset] = predDC[c.type] << Al;
                                             } else {
                                                 let bit = nb();
                                                 if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
-                                                if (bit === 1) {
-                                                    if (coeffBuffer[blockOffset] >= 0) coeffBuffer[blockOffset] += (1 << Al);
-                                                    else coeffBuffer[blockOffset] -= (1 << Al);
-                                                }
+                                                if (bit === 1) coeffBuffer[blockOffset] |= (1 << Al);
                                             }
                                         }
 
                                         // --- AC SCAN ---
                                         if (Se > 0) {
                                             const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
-                                            if (!tbl) { markerFound = true; break; }
+                                            const p1 = 1 << Al, m1 = (-1) << Al;
 
                                             if (Ah === 0) {
                                                 // --- AC FIRST SCAN ---
@@ -679,218 +860,81 @@ const JpegCORE = {
                                                 } else {
                                                     let k = Math.max(Ss, 1);
                                                     while (k <= Se) {
-                                                        let s = rh(tbl);
-                                                        // FIX: RST Handling
-                                                        if (s === STAT_RST) {
-                                                            predDC = [0, 0, 0];
-                                                            bc=0; eob_run=0;
-                                                            s = rh(tbl);
-                                                        }
-                                                        if (s === STAT_MARKER || s === null) { markerFound = true; break; }
-
-                                                        const r = s >> 4, v = s & 15;
-                                                        if (v === 0) {
+                                                        let rs = rh(tbl);
+                                                        if (rs === STAT_MARKER || rs === null) { markerFound = true; break; }
+                                                        const r = rs >> 4, s = rs & 15;
+                                                        if (s === 0) {
                                                             if (r < 15) {
-                                                                const extra = readRawBits(r);
-                                                                if (extra === null) { eob_run=0; markerFound=true; break; }
-                                                                eob_run = (1 << r) + extra;
-                                                                eob_run--; break;
+                                                                let extra = readRawBits(r);
+                                                                eob_run = (1 << r) + extra - 1;
+                                                                break;
                                                             } else { k += 15; }
                                                         } else {
                                                             k += r;
-                                                            const val = rv(v);
-                                                            if (val === null) { markerFound = true; break; }
+                                                            let val = rv(s);
                                                             if (k <= Se) coeffBuffer[blockOffset + ZZ[k]] = val << Al;
                                                         }
                                                         k++;
                                                     }
                                                 }
                                             } else {
-                                                // --- AC SUCCESSIVE (Ah > 0) ROBUST FIX ---
-                                                // Strategie: "Seek & Refine Loop"
-                                                // Anstatt einen Status zu speichern, führen wir Runs sofort aus,
-                                                // indem wir k vorwärts bewegen und dabei alles verfeinern, was im Weg liegt.
+                                                // --- AC SUCCESSIVE (Verfeinerung) ---
+                                                let k = Math.max(Ss, 1);
+                                                if (eob_run > 0) {
+                                                    // Während eines EOB-Runs werden nur existierende Werte verfeinert
+                                                    while (k <= Se) {
+                                                        const idx = blockOffset + ZZ[k];
+                                                        if (coeffBuffer[idx] !== 0) {
+                                                            if (nb() === 1) coeffBuffer[idx] += (coeffBuffer[idx] > 0) ? p1 : m1;
+                                                        }
+                                                        k++;
+                                                    }
+                                                    eob_run--;
+                                                } else {
+                                                    while (k <= Se) {
+                                                        let rs = rh(tbl);
+                                                        if (rs === STAT_MARKER || rs === null) { markerFound = true; break; }
+                                                        const r = rs >> 4, s = rs & 15;
+                                                        let zerosToSkip = r;
 
-                                                  let k = Math.max(Ss, 1);
-                                                  const p1 = 1 << Al;
-                                                  const m1 = (-1) << Al;
-
-                                                  while (k <= Se) {
-                                                      const idx = blockOffset + ZZ[k];
-
-                                                      // 1. Ist hier schon ein Wert? -> Immer verfeinern!
-                                                      if (coeffBuffer[idx] !== 0) {
-                                                          let bit = nb();
-                                                          if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
-                                                          if (bit === 1) {
-                                                              if (coeffBuffer[idx] > 0) coeffBuffer[idx] += p1;
-                                                              else coeffBuffer[idx] += m1;
-                                                          }
-                                                          k++;
-                                                          continue; // Weiter zum nächsten Koeffizienten
-                                                      }
-
-                                                      // 2. Hier ist eine Null. Was tun?
-
-                                                      // Fall A: Wir sind noch in einem EOB-Run von vorherigen Blöcken (oder diesem).
-                                                      // Wir dürfen KEINEN Huffman Code lesen, müssen aber k weiterlaufen lassen,
-                                                      // falls später im Block noch Non-Zeros kommen (unwahrscheinlich bei EOB, aber möglich per Spec).
-                                                      if (eob_run > 0) {
-                                                          k++;
-                                                          continue;
-                                                      }
-
-                                                      // Fall B: Wir müssen einen neuen Befehl lesen
-                                                      let rs = rh(tbl);
-
-                                                      // RST Handling
-                                                      if (rs === STAT_RST) {
-                                                          predDC = [0, 0, 0];
-                                                          bc = 0; eob_run = 0;
-                                                          rs = rh(tbl); // Retry
-                                                      }
-                                                      if (rs === STAT_MARKER || rs === null) { markerFound = true; break; }
-
-                                                      const s = rs & 15;
-                                                      const r = rs >> 4;
-
-                                                      // --- BEFEHL AUSFÜHREN ---
-
-                                                      let zerosToSkip = r;
-
-                                                      if (s === 0) {
-                                                          if (r < 15) {
-                                                              // --- EOB (End of Band) ---
-                                                              const extra = readRawBits(r);
-                                                              if (extra === null) { markerFound = true; break; }
-                                                              eob_run = (1 << r) + extra;
-                                                              eob_run--; // Dieser Block zählt dazu
-
-                                                              // Rest des Blocks überspringen (aber Refinement fortsetzen!)
-                                                              k++; // Aktuelle Null überspringen
-                                                              continue;
-                                                          } else {
-                                                              // --- ZRL (Zero Run Length) ---
-                                                              // Überspringe 15 Nullen. Die aktuelle ist die 16te (oder andersrum).
-                                                              // Spec sagt: ZRL = 16 Nullen.
-                                                              zerosToSkip = 15; // Wir stehen schon auf einer Null, also noch 15 weitere suchen
-                                                          }
-                                                      } else {
-                                                          // --- VALUE (Run r, dann Value) ---
-                                                          if (s !== 1) console.warn("Invalid AC code");
-                                                          // Den Wert lesen wir schon jetzt, schreiben ihn aber erst nach dem Skip
-                                                          let bit = nb();
-                                                          if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
-
-                                                          const v = (bit === 1) ? 1 : -1;
-                                                          const newVal = v << Al; // Bitshift für Successive Approx
-
-                                                          // LOGIK: Überspringe 'zerosToSkip' Nullen.
-                                                          // Schreibe 'newVal' in die *nächste* freie Null danach.
-
-                                                          // Schleife zum Überspringen der Nullen
-                                                          while (zerosToSkip > 0) {
-                                                              k++; // Gehe zum nächsten
-                                                              if (k > Se) break; // Block zu Ende (sollte nicht passieren bei validem JPEG)
-
-                                                              const skipIdx = blockOffset + ZZ[k];
-                                                              if (coeffBuffer[skipIdx] !== 0) {
-                                                                  // WICHTIG: Während wir Nullen suchen, müssen wir über Non-Zeros springen
-                                                                  // UND diese verfeinern!
-                                                                  let b2 = nb();
-                                                                  if (b2 === STAT_MARKER || b2 === null) { markerFound = true; break; }
-                                                                  if (b2 === 1) {
-                                                                       if (coeffBuffer[skipIdx] > 0) coeffBuffer[skipIdx] += p1;
-                                                                       else coeffBuffer[skipIdx] += m1;
-                                                                  }
-                                                              } else {
-                                                                  // Wir haben eine Null gefunden!
-                                                                  zerosToSkip--;
-                                                              }
-                                                          }
-                                                          if (markerFound) break;
-
-                                                          // Jetzt stehen wir auf (oder vor) der Null, die den Wert bekommen soll?
-                                                          // Nein, die while-Schleife oben hat 'zerosToSkip' Nullen konsumiert.
-                                                          // Der Wert kommt in die *nächste* Null.
-                                                          // Aber Achtung: Wir müssen k noch einmal erhöhen, um auf die Ziel-Null zu kommen,
-                                                          // falls wir nicht gerade ZRL gemacht haben.
-
-                                                          // Such-Schleife für die Ziel-Position (die Null, die den Wert kriegt)
-                                                          // Wir müssen solange weiterlaufen, bis wir eine Null finden (und Non-Zeros verfeinern)
-                                                          while (k <= Se) {
-                                                               // Wir müssen erst prüfen, ob wir am Ende sind, bevor wir schreiben
-                                                               // Aber wir wollen ja auf die *nächste* Position.
-                                                               // Also erst k checken.
-                                                               // Im Fall r=0 (kein Skip) sind wir noch auf der aktuellen Null.
-                                                               // Wenn wir r Zeros geskippt haben, sind wir auf der letzten geskippten Null.
-                                                               // Wir müssen also für das Schreiben einen Schritt weiter, wenn wir geskippt haben.
-
-                                                               // STOP: Das ist der kniffligste Teil.
-                                                               // Vereinfachung:
-                                                               // r=0: Current Zero kriegt den Wert.
-                                                               // r=5: 5 Zeros bleiben 0. Die 6. Zero kriegt den Wert.
-
-                                                               // Im 'else' (Value) Zweig oben haben wir 'zerosToSkip = r' gesetzt.
-                                                               // Wenn r > 0 war, lief die Loop.
-                                                               // Jetzt müssen wir den Wert schreiben.
-                                                               // Wenn wir geskippt haben, stehen wir auf der r-ten Null.
-                                                               // Wir müssen zur (r+1)-ten Null.
-
-                                                               if (zerosToSkip === 0) { // Zeros sind aufgebraucht
-                                                                    // Schreibe Wert hier hin?
-                                                                    // Wenn r=0 war, wurde die Loop gar nicht betreten. Wir stehen auf der start Null.
-                                                                    // Passt.
-                                                                    // Wenn r=5 war, lief die Loop bis zerosToSkip=0. k zeigt auf die 5. Null.
-                                                                    // Wir müssen also k erhöhen, bis wir die nächste Null finden.
-
-                                                                    // Warte, ZRL (s=0) schreibt keinen Wert!
-                                                                    // Also nur schreiben, wenn s=1.
-
-                                                                    // Um das sauber zu lösen:
-                                                                    // ZRL Logic oben: k so lassen.
-                                                                    // Value Logic: Wir müssen den Wert schreiben.
-                                                                    // Aber: Wenn wir geskippt haben (Loop lief), zeigt k auf die letzte Null des Skips.
-                                                                    // Wir brauchen die nächste.
-                                                               }
-                                                               break; // Raus aus dem Logic Block, rein in die Write Loop unten
-                                                          }
-
-                                                          // Jetzt den Wert setzen (suche nächste Null)
-                                                          // Wir müssen solange k++ machen, bis wir eine Null finden.
-                                                          // Dabei Non-Zeros verfeinern.
-                                                          // ABER: Wenn r=0 war, ist die *aktuelle* Position schon die Null.
-
-                                                          // Kleiner Hack: Wir nutzen eine flag 'needsWrite'.
-                                                          let targetFound = false;
-                                                          while (k <= Se) {
-                                                               const writeIdx = blockOffset + ZZ[k];
-                                                               if (coeffBuffer[writeIdx] !== 0) {
-                                                                    // Refine (wieder!)
-                                                                    let b3 = nb();
-                                                                    if (b3 === 1) {
-                                                                         if (coeffBuffer[writeIdx] > 0) coeffBuffer[writeIdx] += p1;
-                                                                         else coeffBuffer[writeIdx] += m1;
+                                                        if (s === 0) {
+                                                            if (r < 15) {
+                                                                let extra = readRawBits(r);
+                                                                eob_run = (1 << r) + extra;
+                                                                // Verfeinere restliche Koeffizienten im aktuellen Block
+                                                                while (k <= Se) {
+                                                                    const idx = blockOffset + ZZ[k];
+                                                                    if (coeffBuffer[idx] !== 0) {
+                                                                        if (nb() === 1) coeffBuffer[idx] += (coeffBuffer[idx] > 0) ? p1 : m1;
                                                                     }
-                                                               } else {
-                                                                    // Das ist die Ziel-Null!
-                                                                    coeffBuffer[writeIdx] = newVal;
-                                                                    targetFound = true;
-                                                                    break; // Wert gesetzt, fertig mit diesem Befehl
-                                                               }
-                                                               k++;
-                                                          }
-                                                          if (!targetFound) break; // Sollte nicht passieren
-                                                      }
+                                                                    k++;
+                                                                }
+                                                                eob_run--; // Dieser Block ist fertig
+                                                                break;
+                                                            } else { zerosToSkip = 15; }
+                                                        }
 
-                                                      // Nach jedem Befehl (ZRL, EOB, Value) müssen wir k erhöhen,
-                                                      // damit wir beim nächsten Loop-Durchlauf nicht dieselbe Stelle bearbeiten.
-                                                      k++;
-                                                  }
-
-                                                  // Cleanup EOB global
-                                                  if (eob_run > 0) eob_run--;
-                                              }
+                                                        // Run/Value Logik: Verfeinere Non-Zeros, springe über r Nullen
+                                                        while (k <= Se) {
+                                                            const idx = blockOffset + ZZ[k];
+                                                            if (coeffBuffer[idx] !== 0) {
+                                                                if (nb() === 1) coeffBuffer[idx] += (coeffBuffer[idx] > 0) ? p1 : m1;
+                                                            } else {
+                                                                if (zerosToSkip === 0) {
+                                                                    if (s !== 0) {
+                                                                        let bit = nb();
+                                                                        coeffBuffer[idx] = (bit === 1) ? p1 : m1;
+                                                                    }
+                                                                    break;
+                                                                }
+                                                                zerosToSkip--;
+                                                            }
+                                                            k++;
+                                                        }
+                                                        k++;
+                                                    }
+                                                }
+                                            }
                                         }
                                         if (markerFound) break;
                                     }
@@ -898,7 +942,9 @@ const JpegCORE = {
                                 }
                                 if (markerFound) break;
                             }
-                            if (markerFound) pos = bp - 1; else pos = bp;
+
+                            // FIX: Synchronisiere die Stream-Position für den nächsten Scan
+                            pos = reader.pos;
 
                         } else if (marker === M.DHT) {
                             const len = (d[pos + 1] << 8) | d[pos + 2];
@@ -911,7 +957,7 @@ const JpegCORE = {
                                 let count = 0; for (let c of nr) count += c;
                                 const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
                                 if (!tables[tc]) tables[tc] = {};
-                                tables[tc][th] = mh(nr, val);
+                                tables[tc][th] = makeTree(nr, val);
                             }
                             pos = end;
                         } else if (marker === M.EOI) { break; }
@@ -925,7 +971,7 @@ const JpegCORE = {
                 console.error("Critical Decoder Failure:", globalErr);
                 return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
             }
-        },
+        },//*/
 
         // Wrapper für Abwärtskompatibilität zu v1.8.0
         extractBlocks: async function(file) {
