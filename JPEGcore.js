@@ -331,7 +331,7 @@ const JpegCORE = {
             }
         },
 
-        // --- 2. HYBRID DECODER (Baseline Fix + Progressive Fix) ---
+        // --- 2. HYBRID DECODER (Final Fix: RST + Progressive EOB Refinement) ---
         extractBlocksStruct: async function(file) {
             try {
                 const buf = await file.arrayBuffer();
@@ -339,6 +339,7 @@ const JpegCORE = {
                 const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG, SM = JpegCORE.Constants.SAMPLE_MODES;
                 const H = JpegCORE.Constants.HUFFMAN;
 
+                // STATUS CODES
                 const STAT_MARKER = -1;
                 const STAT_RST = -2;
 
@@ -568,18 +569,12 @@ const JpegCORE = {
 
                                             if (Ah === 0) {
                                                 let s = rh(tbl);
-                                                // === RST FIX FÜR BASELINE ===
+                                                // FIX: RST Handling Complete Reset
                                                 if (s === STAT_RST) {
-                                                    // Wenn RST gefunden wird, MÜSSEN ALLE DC-Werte auf 0 resettet werden!
-                                                    // Nicht nur der aktuelle (c.type).
                                                     predDC = [0, 0, 0];
-                                                    bc = 0;
-                                                    eob_run = 0;
-                                                    successiveACState = 0;
+                                                    bc = 0; eob_run = 0; successiveACState = 0;
                                                     s = rh(tbl);
                                                 }
-                                                // ==============================
-
                                                 if (s === STAT_MARKER || s === null) { markerFound = true; break; }
 
                                                 let diff = 0; if (s !== 0) diff = rv(s);
@@ -609,14 +604,12 @@ const JpegCORE = {
                                                     let k = Math.max(Ss, 1);
                                                     while (k <= Se) {
                                                         let s = rh(tbl);
-                                                        // === RST FIX FÜR AC LOOP ===
+                                                        // FIX: RST Handling
                                                         if (s === STAT_RST) {
-                                                            predDC = [0, 0, 0]; // Safety Reset
+                                                            predDC = [0, 0, 0];
                                                             bc=0; eob_run=0;
                                                             s = rh(tbl);
                                                         }
-                                                        // ===========================
-
                                                         if (s === STAT_MARKER || s === null) { markerFound = true; break; }
 
                                                         const r = s >> 4, v = s & 15;
@@ -637,99 +630,119 @@ const JpegCORE = {
                                                     }
                                                 }
                                             } else {
-                                                // --- AC SUCCESSIVE (Progressive) ---
-                                                let k = Math.max(Ss, 1);
+                                                  // --- AC SUCCESSIVE (Ah > 0) FINAL FIX ---
+                                                  let k = Math.max(Ss, 1);
+                                                  const p1 = 1 << Al;
+                                                  const m1 = (-1) << Al;
 
-                                                if (eob_run > 0) {
-                                                    successiveACState = 4;
-                                                } else {
-                                                    successiveACState = 0;
-                                                    acRun = 0;
-                                                }
+                                                  // Status für verzögertes Setzen von neuen Werten (Run-Length Handling)
+                                                  // Diese müssen pro Block zurückgesetzt werden
+                                                  let acRun = 0;
+                                                  let pendingValue = 0;
+                                                  let forceValueNext = false; // "resetZero" Flag
 
-                                                while (k <= Se) {
-                                                    const z = ZZ[k];
-                                                    const idx = blockOffset + z;
+                                                  while (k <= Se) {
+                                                      const idx = blockOffset + ZZ[k];
+                                                      const val = coeffBuffer[idx];
 
-                                                    switch (successiveACState) {
-                                                        case 0:
-                                                            let rs = rh(tbl);
-                                                            // RST Handling auch hier
-                                                            if (rs === STAT_RST) {
-                                                                predDC = [0,0,0];
-                                                                bc=0; eob_run=0; successiveACState=0;
-                                                                rs = rh(tbl);
-                                                            }
+                                                      if (val !== 0) {
+                                                          // --- 1. EXISTIERENDE WERTE VERFEINERN ---
+                                                          // Werden sofort verarbeitet, beeinflussen keine Runs!
+                                                          let bit = nb();
+                                                          if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
+                                                          if (bit === 1) {
+                                                              if (val > 0) coeffBuffer[idx] += p1;
+                                                              else coeffBuffer[idx] += m1;
+                                                          }
+                                                      } else {
+                                                          // --- 2. NULLEN BEHANDELN ---
+                                                          // Wenn EOB aktiv ist: Nichts tun (implizite Null)
+                                                          if (eob_run > 0) {
+                                                              k++; continue;
+                                                          }
 
-                                                            if (rs === STAT_MARKER || rs === null) { markerFound = true; break; }
+                                                          // Wenn wir mitten in einem Run sind:
+                                                          if (acRun > 0) {
+                                                              acRun--;
+                                                              // Sonderfall: Wenn der Run abgelaufen ist und ein Wert gesetzt werden muss (nicht bei ZRL)
+                                                              // Dies wird im nächsten Schritt (wenn acRun==0 ist) handled oder hier?
+                                                              // Logik: acRun-- verbraucht die aktuelle Null.
+                                                              // Wenn wir jetzt bei 0 sind, ist die *nächste* Null der Treffer?
+                                                              // Nein, 'forceValueNext' bedeutet: Die *aktuelle* Null ist der Treffer.
+                                                              // Da wir acRun gerade erst dekrementiert haben, machen wir weiter.
+                                                              k++; continue;
+                                                          }
 
-                                                            const s = rs & 15, r = rs >> 4;
-                                                            if (s === 0) {
-                                                                if (r < 15) {
-                                                                    const extra = readRawBits(r);
-                                                                    if (extra === null) { markerFound=true; break; }
-                                                                    eob_run = (1 << r) + extra;
-                                                                    successiveACState = 4;
-                                                                } else {
-                                                                    acRun = 16;
-                                                                    successiveACState = 1;
-                                                                }
-                                                            } else {
-                                                                if (s !== 1) throw new Error("invalid ACn encoding");
-                                                                successiveACNextValue = rv(s);
-                                                                if (successiveACNextValue === null) { markerFound=true; break; }
-                                                                successiveACState = (r > 0) ? 2 : 3;
-                                                                acRun = r;
-                                                            }
-                                                            continue;
+                                                          // Wenn ein verzögerter Wert gesetzt werden muss (nach dem Run):
+                                                          if (forceValueNext) {
+                                                              coeffBuffer[idx] = pendingValue;
+                                                              forceValueNext = false;
+                                                              // Wert gesetzt. Weiter zum nächsten Koeffizienten.
+                                                              k++; continue;
+                                                          }
 
-                                                        case 1: case 2:
-                                                            if (coeffBuffer[idx] !== 0) {
-                                                                let bit = nb();
-                                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) {
-                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
-                                                                    else coeffBuffer[idx] -= (1 << Al);
-                                                                }
-                                                            } else {
-                                                                acRun--;
-                                                                if (acRun === 0) successiveACState = (successiveACState === 2) ? 3 : 0;
-                                                            }
-                                                            break;
+                                                          // --- 3. NEUEN BEFEHL LESEN ---
+                                                          // (Nur wenn wir keine Runs/Pending Values haben)
+                                                          let rs = rh(tbl);
+                                                          if (rs === STAT_RST) {
+                                                              predDC = [0, 0, 0];
+                                                              bc = 0; eob_run = 0;
+                                                              // Reset Block States
+                                                              acRun = 0; forceValueNext = false;
+                                                              rs = rh(tbl);
+                                                          }
+                                                          if (rs === STAT_MARKER || rs === null) { markerFound = true; break; }
 
-                                                        case 3:
-                                                            if (coeffBuffer[idx] !== 0) {
-                                                                let bit = nb();
-                                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) {
-                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
-                                                                    else coeffBuffer[idx] -= (1 << Al);
-                                                                }
-                                                            } else {
-                                                                coeffBuffer[idx] = successiveACNextValue << Al;
-                                                                successiveACState = 0;
-                                                            }
-                                                            break;
+                                                          const s = rs & 15;
+                                                          const r = rs >> 4;
 
-                                                        case 4:
-                                                            if (coeffBuffer[idx] !== 0) {
-                                                                let bit = nb();
-                                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) {
-                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
-                                                                    else coeffBuffer[idx] -= (1 << Al);
-                                                                }
-                                                            }
-                                                            break;
-                                                    }
-                                                    if (markerFound) break;
-                                                    k++;
-                                                }
+                                                          if (s === 0) {
+                                                              if (r < 15) {
+                                                                  // --- EOB ---
+                                                                  const extra = readRawBits(r);
+                                                                  if (extra === null) { markerFound = true; break; }
+                                                                  eob_run = (1 << r) + extra;
+                                                                  eob_run--; // Aktueller Block zählt dazu
+                                                                  // Rest des Blocks sind Nullen.
+                                                                  // Wir müssen die Loop aber fortsetzen, um evtl. existierende Non-Zeros zu verfeinern!
+                                                              } else {
+                                                                  // --- ZRL (16 Nullen) ---
+                                                                  acRun = 15; // Aktuelle Null zählt als die erste, also 15 weitere skippen
+                                                              }
+                                                          } else {
+                                                              // --- NEUER WERT (Run r, dann Value) ---
+                                                              if (s !== 1) console.warn("Invalid AC code");
 
-                                                if (successiveACState === 4) {
-                                                    eob_run--;
-                                                }
-                                            }
+                                                              let bit = nb();
+                                                              if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
+
+                                                              const v = (bit === 1) ? 1 : -1;
+                                                              const finalVal = v << Al;
+
+                                                              if (r === 0) {
+                                                                  // Sofort setzen
+                                                                  coeffBuffer[idx] = finalVal;
+                                                              } else {
+                                                                  // Verzögern
+                                                                  acRun = r; // r Nullen skippen (inkl. der aktuellen? Nein, r DAVOR)
+                                                                  // Logik: r=5. Current is 1st zero.
+                                                                  // Wir setzen acRun=5.
+                                                                  // In dieser Iteration verbrauchen wir die erste:
+                                                                  acRun--;
+
+                                                                  pendingValue = finalVal;
+                                                                  forceValueNext = true;
+                                                              }
+                                                          }
+                                                      }
+                                                      k++;
+                                                  }
+
+                                                  // EOB Run global verwalten
+                                                  if (eob_run > 0) {
+                                                      eob_run--;
+                                                  }
+                                              }
                                         }
                                         if (markerFound) break;
                                     }
