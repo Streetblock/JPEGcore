@@ -1,16 +1,13 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.7.5 (Fix: IDCT Scaling Normalization)
+* Extended Version 1.7.6 (New Glitch Features)
 * * CORES:
-* - Decoder: Fixed IDCT amplitude/saturation bug during downscaling
-* - Encoder: Uses Natural order internally, ZigZag for file writing (v1.7.4 fix included)
-* - Analysis: Header parsing & Table extraction
+* - Decoder: Fixed IDCT amplitude/saturation bug (v1.7.5)
+* - Encoder: ZigZag order fix for saving (v1.7.4)
 * * * Features:
-* - Encode (RGB -> JPEG)
-* - Decode (JPEG -> RGB via render) including FIXED Progressive Scan support
-* - Scale-on-Load Decode (Fast thumbnails 1/2, 1/4, 1/8 size with correct colors)
-* - Lossless Transforms (Rotate, Flip without re-compression)
-* - Glitch Art / Filters
+* - NEW: Quantization Crush (Deep Fry effect)
+* - NEW: Chromatic Aberration (Channel shifting)
+* - Standard: Encode, Decode (Scale-on-Load), Transform, Analysis
 */
 
 const JpegCORE = {
@@ -775,12 +772,11 @@ const JpegCORE = {
         }
     },
 
-    // --- 5. GLITCH ---
+    // --- 5. GLITCH (v1.7.6 New Methods) ---
     Glitch: {
         swapChannels: function(captured) {
             const sm = JpegCORE.Constants.SAMPLE_MODES[captured.mode];
             const blocksPerMCU = sm.blocks.length;
-
             let cbIndex = -1, crIndex = -1;
             for(let i=0; i<blocksPerMCU; i++) {
                 if(sm.blocks[i].t === 'C') {
@@ -788,7 +784,6 @@ const JpegCORE = {
                     else crIndex = i;
                 }
             }
-
             if(cbIndex !== -1 && crIndex !== -1) {
                 for(let i=0; i < captured.blocks.length; i += blocksPerMCU) {
                     const temp = captured.blocks[i + cbIndex];
@@ -818,6 +813,63 @@ const JpegCORE = {
                      }
                 }
             }
+            return captured;
+        },
+
+        // NEW: Quantization Crush (Deep Fry)
+        quantizationCrush: function(captured, factor) {
+            // Modifies the quantization tables in place to simulate extreme compression
+            [0, 1].forEach(id => {
+                if(captured.quantTables[id]) {
+                    for(let i=0; i<64; i++) {
+                        // Max out at 255 to stay valid 8-bit, but push lower values up
+                        let val = captured.quantTables[id][i] * factor;
+                        if (val > 255) val = 255;
+                        if (val < 1) val = 1;
+                        captured.quantTables[id][i] = Math.floor(val);
+                    }
+                }
+            });
+            return captured;
+        },
+
+        // NEW: Chromatic Aberration
+        chromaticAberration: function(captured, offset) {
+            // Shifts Cb (comp=1) and Cr (comp=2) blocks by 'offset' in the block array
+            if (offset === 0) return captured;
+
+            // 1. Identify all Cb and Cr blocks indices
+            const cbIndices = [];
+            const crIndices = [];
+
+            for(let i=0; i<captured.blocks.length; i++) {
+                if (captured.blocks[i].comp === 1) cbIndices.push(i);
+                else if (captured.blocks[i].comp === 2) crIndices.push(i);
+            }
+
+            // 2. Helper to shift data
+            // We shift the *Data references*, keeping the structure (type/comp) in place
+            const shiftChannel = (indices, shift) => {
+                const len = indices.length;
+                // Safe Modulo
+                const safeShift = ((shift % len) + len) % len;
+                if (safeShift === 0) return;
+
+                // Copy original data references
+                const originalData = indices.map(idx => captured.blocks[idx].data);
+
+                // Apply rotated data to blocks
+                for(let i=0; i<len; i++) {
+                    // New index in the data source
+                    const srcIndex = (i - safeShift + len) % len;
+                    captured.blocks[indices[i]].data = originalData[srcIndex];
+                }
+            };
+
+            // Shift Cb (Blue) negative, Cr (Red) positive for stereo-like separation
+            shiftChannel(cbIndices, -offset);
+            shiftChannel(crIndices, offset);
+
             return captured;
         }
     },
