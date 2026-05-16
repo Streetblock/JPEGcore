@@ -6,6 +6,7 @@
 * - Decode (JPEG -> RGB via render) including Progressive Scan support
 * - Scale-on-Load Decode (Fast thumbnails 1/2, 1/4, 1/8 size)
 * - Lossless Transforms (Rotate, Flip without re-compression)
+* - Glitch Art / Filters (Datamoshing, Quantization hacks, Channel Swapping)
 * - EXIF Parsing (Orientation detection)
  */
 
@@ -764,7 +765,62 @@ const JpegCORE = {
         }
     },
 
-    // --- 5. ENCODER ---
+    // --- 5. GLITCH ART (NEW) ---
+    Glitch: {
+        swapChannels: function(captured) {
+            // Swap Cb (comp=1) and Cr (comp=2)
+            // Implementation: We must identify the block positions in the MCU and swap them.
+            // Just changing .comp/type isn't enough because Renderer iterates sequentially.
+            const sm = JpegCORE.Constants.SAMPLE_MODES[captured.mode];
+            const blocksPerMCU = sm.blocks.length;
+
+            // Find indices of Cb and Cr in the MCU definition
+            let cbIndex = -1, crIndex = -1;
+            for(let i=0; i<blocksPerMCU; i++) {
+                if(sm.blocks[i].t === 'C') {
+                    if(sm.blocks[i].c === 0) cbIndex = i;
+                    else crIndex = i;
+                }
+            }
+
+            if(cbIndex !== -1 && crIndex !== -1) {
+                for(let i=0; i < captured.blocks.length; i += blocksPerMCU) {
+                    // Swap the block objects at these positions
+                    const temp = captured.blocks[i + cbIndex];
+                    captured.blocks[i + cbIndex] = captured.blocks[i + crIndex];
+                    captured.blocks[i + crIndex] = temp;
+                }
+            }
+            return captured;
+        },
+
+        shred: function(captured, threshold) {
+            // "Quantization Hack": Zero out frequencies > threshold (1..63)
+            // Threshold 1 = DC only (Abstract art), 10 = Low quality
+            const ZZ = JpegCORE.Constants.ZIG_ZAG;
+            for (let b of captured.blocks) {
+                for(let z = threshold; z < 64; z++) {
+                    b.data[ZZ[z]] = 0;
+                }
+            }
+            return captured;
+        },
+
+        fuzz: function(captured, threshold, amount) {
+            // "Noise Hack": Randomize high frequencies instead of zeroing
+            const ZZ = JpegCORE.Constants.ZIG_ZAG;
+            for (let b of captured.blocks) {
+                for(let z = threshold; z < 64; z++) {
+                     if (Math.random() < 0.2) { // Only touch 20% of coeffs for "snow" look
+                         b.data[ZZ[z]] += (Math.random() - 0.5) * amount;
+                     }
+                }
+            }
+            return captured;
+        }
+    },
+
+    // --- 6. ENCODER ---
     Encoder: class {
         constructor(quality, customL, customC) {
             const C = JpegCORE.Constants;
