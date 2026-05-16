@@ -366,8 +366,13 @@ const JpegCORE = {
 
             let scanCount = 0;
 
+            // FIX: Ensure we didn't overshoot the SOS marker in the previous loop.
+            // The first loop breaks when d[pos] == SOS (Marker Byte).
+            // But the next loop expects to start scanning from 0xFF.
+            // We step back one byte to ensure the next loop sees the 0xFF before the SOS.
+            if (d[pos-1] === 0xFF) pos--;
+
             // 4. Multi-Scan Loop (For Progressive JPEG)
-            // 'pos' is currently at the first SOS marker (0xFF, 0xDA)
             while (pos < d.length - 1) {
                 // Advance to next marker
                 if (d[pos] !== 0xFF) { pos++; continue; }
@@ -842,31 +847,6 @@ const JpegCORE = {
                     const temp = captured.blocks[i + cbIndex];
                     captured.blocks[i + cbIndex] = captured.blocks[i + crIndex];
                     captured.blocks[i + crIndex] = temp;
-                }
-            }
-            return captured;
-        },
-
-        shred: function(captured, threshold) {
-            // "Quantization Hack": Zero out frequencies > threshold (1..63)
-            // Threshold 1 = DC only (Abstract art), 10 = Low quality
-            const ZZ = JpegCORE.Constants.ZIG_ZAG;
-            for (let b of captured.blocks) {
-                for(let z = threshold; z < 64; z++) {
-                    b.data[ZZ[z]] = 0;
-                }
-            }
-            return captured;
-        },
-
-        fuzz: function(captured, threshold, amount) {
-            // "Noise Hack": Randomize high frequencies instead of zeroing
-            const ZZ = JpegCORE.Constants.ZIG_ZAG;
-            for (let b of captured.blocks) {
-                for(let z = threshold; z < 64; z++) {
-                     if (Math.random() < 0.2) { // Only touch 20% of coeffs for "snow" look
-                         b.data[ZZ[z]] += (Math.random() - 0.5) * amount;
-                     }
                 }
             }
             return captured;
