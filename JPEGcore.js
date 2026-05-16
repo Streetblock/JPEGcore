@@ -1,6 +1,6 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.6.6 (Hybrid)
+* Extended Version 1.7.3 (Fix: Quantization ZigZag Order)
 * * CORES:
 * - Decoder/Encoder/Transformer: Based on v1.6.6 (Fixed Progressive Scan)
 * - Analysis: Based on v1.6.5 (Restored parseStructure & detailed probe)
@@ -45,13 +45,10 @@ const JpegCORE = {
     // --- 2. ANALYSIS (RESTORED FROM v1.6.5) ---
     Analysis: {
         _readExifOrientation: function(seg) {
-            // Check for valid EXIF Header "Exif\0\0" at offset 4 (after Marker+Len)
-            // Seg structure: [FF, E1, LenH, LenL, 'E', 'x', 'i', 'f', 0, 0, ...TIFF...]
             if (seg.length < 14) return null;
             if (String.fromCharCode(...seg.slice(4, 10)) !== "Exif\0\0") return null;
 
             const tiffStart = 10;
-            // Check Byte Order (II = Little Endian, MM = Big Endian)
             const isLE = (seg[tiffStart] === 0x49 && seg[tiffStart + 1] === 0x49);
 
             const readU16 = (off) => {
@@ -65,10 +62,8 @@ const JpegCORE = {
                 return ((seg[off] << 24) | (seg[off + 1] << 16) | (seg[off + 2] << 8) | seg[off + 3]) >>> 0;
             };
 
-            // TIFF magic 42 (0x002A)
             if (readU16(tiffStart + 2) !== 42) return null;
 
-            // Offset to first IFD (Image File Directory)
             const ifdOffset = readU32(tiffStart + 4);
             let p = tiffStart + ifdOffset;
 
@@ -80,11 +75,7 @@ const JpegCORE = {
             for (let i = 0; i < numEntries; i++) {
                 if (p + 12 > seg.length) break;
                 const tag = readU16(p);
-                // Tag 0x0112 is "Orientation"
                 if (tag === 0x0112) {
-                    // Type 3 = SHORT (2 bytes)
-                    // Count = 1
-                    // Value is contained in the 4-byte value/offset field
                     return readU16(p + 8);
                 }
                 p += 12;
@@ -112,13 +103,10 @@ const JpegCORE = {
                 const segmentEnd = pos + 1 + len;
 
                 if (marker === M.SOF0 || marker === M.SOF2) {
-                    // C0 Lh Ll P H H W W Nf
                     h = (d[pos + 4] << 8) | d[pos + 5];
                     w = (d[pos + 6] << 8) | d[pos + 7];
                     const numComps = d[pos + 8];
                     let compMapList = [];
-                    // Component Struct: [ID, Samp, QT] (3 bytes)
-                    // Starts at pos + 9
                     for (let i = 0; i < numComps; i++) compMapList.push({ samp: d[pos + 10 + (i * 3)] });
                     if (numComps === 1) mcuStructure = SM['GRAY'];
                     else {
@@ -262,7 +250,6 @@ const JpegCORE = {
                 const out = new Float32Array(outSize * outSize);
                 const normFactor = 2 / outSize;
 
-                // Pre-calculate de-quantized coefficients
                 const dqCoeffs = new Float32Array(64);
                 for(let i=0; i<64; i++) dqCoeffs[i] = coeffs[i] * quantTable[i];
 
@@ -271,7 +258,6 @@ const JpegCORE = {
                         let sum = 0;
                         for (let u = 0; u < outSize; u++) {
                             for (let v = 0; v < outSize; v++) {
-                                // Correct Transpose: u->y (Row), v->x (Col)
                                 sum += dqCoeffs[u * 8 + v] * base[u][y] * base[v][x];
                             }
                         }
@@ -289,7 +275,6 @@ const JpegCORE = {
             const H = JpegCORE.Constants.HUFFMAN;
             let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
 
-            // Helper: Generate Huffman Table
             const mh = (L, V) => {
                 let t = {}, c = 0, p = 0;
                 for (let i = 1; i <= 16; i++) {
@@ -313,7 +298,6 @@ const JpegCORE = {
             if (d[0] !== 0xFF || d[1] !== M.SOI) throw new Error("Not a JPEG");
             pos = 2;
 
-            // --- 1. Header Scan ---
             while (pos < d.length - 1) {
                 if (d[pos] !== 0xFF) { pos++; continue; }
                 while (d[pos] === 0xFF && pos < d.length) pos++;
@@ -423,7 +407,6 @@ const JpegCORE = {
             let scanCount = 0;
             let predDC = [0, 0, 0];
 
-            // --- 2. Multi-Scan Loop ---
             while (pos < d.length - 1) {
                 if (d[pos] !== 0xFF) { pos++; continue; }
                 while(d[pos] === 0xFF && pos < d.length) pos++;
@@ -475,7 +458,6 @@ const JpegCORE = {
                                     } else {
                                         let bit = nb();
                                         if (bit === 'MARKER') { markerFound = true; break; }
-                                        // --- FIX: Handle negative DC refinement correctly ---
                                         if (bit === 1) {
                                             if (coeffBuffer[blockOffset] >= 0) coeffBuffer[blockOffset] += (1 << Al);
                                             else coeffBuffer[blockOffset] -= (1 << Al);
@@ -554,7 +536,6 @@ const JpegCORE = {
                     if (markerFound) pos = bp - 1; else pos = bp;
 
                 } else if (marker === M.DHT) {
-                    // ... DHT Parsing (same as before) ...
                     const len = (d[pos + 1] << 8) | d[pos + 2];
                     let subPos = pos + 3, end = pos + 1 + len;
                     while (subPos < end) {
@@ -592,12 +573,7 @@ const JpegCORE = {
             }
         },
 
-        // ... render function ...
         render: function(decoded, scale = 1.0) {
-           // (Keep your existing render function, it works fine)
-           // Just ensure you use the updated IDCT class above!
-           // ...
-           // [Include the render function code from previous steps here]
             let blockSize = 8;
             if (scale === 0.5) blockSize = 4; else if (scale === 0.25) blockSize = 2; else if (scale === 0.125) blockSize = 1;
 
@@ -681,16 +657,13 @@ const JpegCORE = {
     Transformer: {
         _transformCoeffs: function(data, op) {
             const out = new Int32Array(64);
-            // op: 0=FlipH, 1=FlipV, 2=Transpose
             for (let y = 0; y < 8; y++) {
                 for (let x = 0; x < 8; x++) {
                     let val = 0;
-                    if (op === 2) val = data[x * 8 + y]; // Transpose
+                    if (op === 2) val = data[x * 8 + y];
                     else val = data[y * 8 + x];
 
-                    // Flip H: Odd columns negate
                     if (op === 0 && (x % 2 !== 0)) val = -val;
-                    // Flip V: Odd rows negate
                     if (op === 1 && (y % 2 !== 0)) val = -val;
 
                     out[y * 8 + x] = val;
@@ -844,15 +817,29 @@ const JpegCORE = {
         }
     },
 
-    // --- 6. ENCODER (v1.6.6) ---
+    // --- 6. ENCODER (v1.7.4 - Fixed ZigZag Quantization Order) ---
     Encoder: class {
         constructor(quality, customL, customC) {
             const C = JpegCORE.Constants;
-            if (customL && customC) { this.tY = customL; this.tC = customC; }
-            else {
+
+            // Helper: Ensure the default/custom tables (which are usually ZigZag) are converted
+            // to NATURAL order for internal calculations (dct)
+            const toNatural = (zz) => {
+                const n = new Uint8Array(64);
+                const Z = C.ZIG_ZAG;
+                for(let i=0; i<64; i++) n[Z[i]] = zz[i];
+                return n;
+            };
+
+            if (customL && customC) {
+                this.tY = customL;
+                this.tC = customC;
+            } else {
                 const s = quality < 50 ? 5000 / quality : 200 - quality * 2;
                 const scale = (tbl) => tbl.map(v => Math.floor((v * s + 50) / 100) || 1);
-                this.tY = scale(C.QUANT_L); this.tC = scale(C.QUANT_C);
+                // Convert Constants.QUANT_L (ZigZag) to Natural for 'dct' usage
+                this.tY = toNatural(scale(C.QUANT_L));
+                this.tC = toNatural(scale(C.QUANT_C));
             }
             const H = C.HUFFMAN;
             this.computeHuffmanTbl(H.DC_L_NR, H.DC_L_VAL, H.AC_L_NR, H.AC_L_VAL, H.DC_C_NR, H.DC_C_VAL, H.AC_C_NR, H.AC_C_VAL);
@@ -920,10 +907,34 @@ const JpegCORE = {
             const isGray = (captured.mode === 'GRAY'), numComps = isGray ? 1 : 3;
             const w = captured.w, h = captured.h;
 
+            let qY = this.tY, qC = this.tC;
+            if (captured.quantTables) {
+                if(captured.quantTables[0]) qY = captured.quantTables[0];
+                if(captured.quantTables[1]) qC = captured.quantTables[1];
+            }
+
+            // --- FIX: Convert Natural Tables (Internal) to ZigZag (File Spec) ---
+            const toZigZag = (n) => {
+                const zz = new Uint8Array(64);
+                const Z = JpegCORE.Constants.ZIG_ZAG;
+                // output[i] corresponds to ZigZag index i.
+                // The value comes from Natural index Z[i].
+                for(let i=0; i<64; i++) zz[i] = n[Z[i]];
+                return zz;
+            };
+
             wr(0xFF00 | M.SOI);
-            if (metaSegments) { for (let seg of metaSegments) { for (let b of seg) this.buf.push(b); } }
-            else { wr(0xFF00 | M.APP0); wr(16); [0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0].forEach(wb); }
-            wr(0xFF00 | M.DQT); wr(132); wb(0); this.tY.forEach(v => wb(v)); wb(1); this.tC.forEach(v => wb(v));
+            if (metaSegments && metaSegments.length > 0) {
+                for (let seg of metaSegments) { for (let b of seg) this.buf.push(b); }
+            } else {
+                wr(0xFF00 | M.APP0); wr(16); [0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0].forEach(wb);
+            }
+
+            // DQT: Must use ZigZag order
+            wr(0xFF00 | M.DQT); wr(132);
+            wb(0); toZigZag(qY).forEach(v => wb(v));
+            wb(1); toZigZag(qC).forEach(v => wb(v));
+
             wr(0xFF00 | M.SOF0); wr(8 + 3 * numComps); wb(8); wr(h); wr(w); wb(numComps); wb(1); wb((sm.hMax << 4) | sm.vMax); wb(0);
             if (!isGray) { wb(2); wb(0x11); wb(1); wb(3); wb(0x11); wb(1); }
             let len = 6, ht = this.curHT; [ht.dclv, ht.aclv, ht.dccv, ht.accv].forEach(v => len += 16 + v.length);
