@@ -3,7 +3,7 @@
 * No external dependencies.
 * * Features:
 * - Encode (RGB -> JPEG)
-* - Decode (JPEG -> RGB via render)
+* - Decode (JPEG -> RGB via render) including Progressive Scan support
 * - Scale-on-Load Decode (Fast thumbnails 1/2, 1/4, 1/8 size)
 * - Lossless Transforms (Rotate, Flip without re-compression)
 * - EXIF Parsing (Orientation detection)
@@ -294,12 +294,17 @@ const JpegCORE = {
             const mh = (L, V) => { let t = {}, c = 0, p = 0; for (let i = 1; i <= 16; i++) { for (let j = 0; j < L[i - 1]; j++) { let k = ""; for (let x = i - 1; x >= 0; x--)k += (c >> x) & 1; t[k] = V[p++]; c++; } c <<= 1; } return t; };
 
             if (d[0] !== 0xFF || d[1] !== M.SOI) throw new Error("Not a JPEG");
+
+            // 1. Initial Scan for Headers (Size, Frame Type, Huffman Tables)
             while (pos < d.length - 1) {
                 if (d[pos] !== 0xFF) { pos++; continue; }
                 while (d[pos] === 0xFF && pos < d.length) pos++;
                 if (pos >= d.length) break;
                 const marker = d[pos];
+
+                // Stop at first SOS (Start of Scan) - will be processed in Phase 2
                 if (marker === M.SOS) break;
+
                 const len = (d[pos + 1] << 8) | d[pos + 2], end = pos + 1 + len;
                 if (marker === M.SOF0 || marker === M.SOF2) {
                     h = (d[pos + 4] << 8) | d[pos + 5]; w = (d[pos + 6] << 8) | d[pos + 7];
@@ -313,59 +318,210 @@ const JpegCORE = {
                 pos = end;
             }
             if (!mcuStructure) throw new Error("Structure detection failed");
-            const blocksPerMCU = mcuStructure.blocks.length, cols = Math.ceil(w / (mcuStructure.hMax * 8)), rows = Math.ceil(h / (mcuStructure.vMax * 8)), totalBlocks = cols * rows * blocksPerMCU;
+
+            // 2. Prepare Buffers
+            const blocksPerMCU = mcuStructure.blocks.length;
+            const cols = Math.ceil(w / (mcuStructure.hMax * 8));
+            const rows = Math.ceil(h / (mcuStructure.vMax * 8));
+            const totalBlocks = cols * rows * blocksPerMCU;
             const coeffBuffer = new Int32Array(totalBlocks * 64);
-            let bp = 0, bb = 0, bc = 0;
+
+            // 3. Bitstream Reader State (Persistent across scans)
+            let bp = pos, bb = 0, bc = 0;
             const nb = () => { if (bc === 0) { if (bp >= d.length) return null; let b = d[bp++]; if (b === 0xFF) { let next = d[bp]; if (next === 0) { bp++; } else if (next >= M.RST0 && next <= M.RST7) { bp++; return 'RST'; } else if (next === M.EOI) { return null; } else { return 'MARKER'; } } bb = b; bc = 8; } return (bb >> (--bc)) & 1; };
             const rh = (m) => { let k = ""; while (k.length < 16) { let b = nb(); if (b === 'RST' || b === 'MARKER') return b; if (b === null) return null; k += b; if (m[k] !== undefined) return m[k]; } return null; };
             const rv = (l) => { let v = 0; for (let i = 0; i < l; i++) { let b = nb(); if (b === null || typeof b === 'string') return null; v = (v << 1) | b; } return v < (1 << (l - 1)) ? v + (-1 << l) + 1 : v; };
-            function applyRefine(buff, idx, bit, shift) { if (bit === 1) { if (buff[idx] > 0) buff[idx] += (1 << shift); else if (buff[idx] < 0) buff[idx] += (-1 << shift); } }
 
-            pos = 0;
+            // 4. Multi-Scan Loop (For Progressive JPEG)
+            // 'pos' is currently at the first SOS marker (0xFF, 0xDA)
             while (pos < d.length - 1) {
+                // Advance to next marker
                 if (d[pos] !== 0xFF) { pos++; continue; }
-                const marker = d[pos + 1];
+                while (d[pos] === 0xFF && pos < d.length) pos++;
+                const marker = d[pos];
+
                 if (marker === M.SOS) {
-                    const len = (d[pos + 2] << 8) | d[pos + 3], sosEnd = pos + 2 + len;
+                    const len = (d[pos + 1] << 8) | d[pos + 2], sosEnd = pos + 1 + len;
                     const ns = d[pos + 4], comps = [];
                     for (let i = 0; i < ns; i++) { const cs = d[pos + 5 + i * 2], mapObj = compMapList.find(x => x.id === cs); if (mapObj) comps.push({ type: mapObj.type, dcTbl: (d[pos + 6 + i * 2] >> 4) & 0xF, acTbl: d[pos + 6 + i * 2] & 0xF }); }
                     const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1], Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
-                    bp = sosEnd; bb = 0; bc = 0; let eob_run = 0, predDC = [0, 0, 0];
-                    const typeToIndices = {}; for (let b = 0; b < blocksPerMCU; b++) { const def = mcuStructure.blocks[b], t = (def.t === 'C') ? (def.c === 0 ? 1 : 2) : 0; if (!typeToIndices[t]) typeToIndices[t] = []; typeToIndices[t].push(b); }
 
+                    // Sync bit reader to start of entropy segment
+                    bp = sosEnd; bb = 0; bc = 0;
+
+                    // State for this scan
+                    let eob_run = 0;
+                    const predDC = [0, 0, 0]; // Reset DC predictors per scan
+                    const typeToIndices = {};
+                    for (let b = 0; b < blocksPerMCU; b++) {
+                        const def = mcuStructure.blocks[b], t = (def.t === 'C') ? (def.c === 0 ? 1 : 2) : 0;
+                        if (!typeToIndices[t]) typeToIndices[t] = [];
+                        typeToIndices[t].push(b);
+                    }
+
+                    // Process all MCUs for this scan
+                    let markerFound = false;
                     for (let m = 0; m < cols * rows; m++) {
                         for (let c of comps) {
                             const blkIndices = typeToIndices[c.type]; if (!blkIndices) continue;
                             for (let bIdx of blkIndices) {
                                 const blockOffset = (m * blocksPerMCU + bIdx) * 64;
+
+                                // --- PROGRESSIVE DECODING LOGIC ---
+
+                                // 1. DC Coefficient
                                 if (Ss === 0) {
                                     if (Ah === 0) {
+                                        // DC First Scan
                                         const tbl = tables[0][c.dcTbl]; let s = rh(tbl);
-                                        if (s === 'RST') { predDC = [0, 0, 0]; bc = 0; eob_run = 0; s = rh(tbl); } if (s === 'MARKER') { pos = bp - 2; m = cols * rows; break; } if (s == null) break;
-                                        let diff = 0; if (s) diff = rv(s); predDC[c.type] += diff; coeffBuffer[blockOffset] = predDC[c.type] << Al;
-                                    } else { let bit = nb(); if (bit !== 'MARKER' && bit !== null) coeffBuffer[blockOffset] |= (bit << Al); }
+                                        if (s === 'RST') { eob_run = 0; predDC[c.type] = 0; bc=0; s = rh(tbl); } // Reset logic
+                                        if (s === 'MARKER') { markerFound = true; break; }
+                                        let diff = 0; if (s) diff = rv(s);
+                                        predDC[c.type] += diff;
+                                        coeffBuffer[blockOffset] = predDC[c.type] << Al;
+                                    } else {
+                                        // DC Refine Scan
+                                        let bit = nb();
+                                        if (bit === 'MARKER') { markerFound = true; break; }
+                                        if (bit === 1) coeffBuffer[blockOffset] |= (1 << Al);
+                                    }
                                 }
+
+                                // 2. AC Coefficients
                                 if (Se > 0) {
-                                    const tbl = tables[1][c.acTbl];
-                                    if (eob_run > 0) { eob_run--; if (Ah > 0) { for (let k = Ss; k <= Se; k++) { const idx = blockOffset + ZZ[k]; if (coeffBuffer[idx] !== 0) applyRefine(coeffBuffer, idx, nb(), Al); } } }
-                                    else {
-                                        let k = Ss;
+                                    if (eob_run > 0) {
+                                        eob_run--;
+                                        if (Ah > 0) {
+                                            // Refine ACs during EOB run (Skip new zeroes, refine old non-zeroes)
+                                            // Iterate current block range
+                                            for(let k=Math.max(Ss,1); k<=Se; k++) {
+                                                const idx = blockOffset + ZZ[k];
+                                                if (coeffBuffer[idx] !== 0) {
+                                                    let bit = nb(); if (bit === 'MARKER') { markerFound=true; break; }
+                                                    if (bit === 1) {
+                                                        if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                        else coeffBuffer[idx] -= (1 << Al);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        const tbl = tables[1][c.acTbl];
+                                        let k = Math.max(Ss, 1);
                                         while (k <= Se) {
-                                            let s = rh(tbl); if (s === 'MARKER') { pos = bp - 2; m = cols * rows; break; }
+                                            let s = rh(tbl);
+                                            if (s === 'MARKER') { markerFound = true; break; }
                                             const r = s >> 4, v = s & 15;
-                                            if (v === 0) { if (r < 15) { eob_run = (1 << r) + rv(r); eob_run--; if (Ah === 0) break; if (Ah > 0) break; } k += 16; }
-                                            else { k += r; const val = rv(v); if (k <= Se) coeffBuffer[blockOffset + ZZ[k]] = val << Al; k++; }
+
+                                            if (v === 0) {
+                                                if (r < 15) {
+                                                    // EOB found
+                                                    eob_run = (1 << r) + rv(r);
+                                                    eob_run--; // Consumes current block
+                                                    if (Ah > 0) {
+                                                        // Refine rest of this block
+                                                        for(; k<=Se; k++) {
+                                                            const idx = blockOffset + ZZ[k];
+                                                            if (coeffBuffer[idx] !== 0) {
+                                                                let bit = nb();
+                                                                if (bit === 1) {
+                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                    else coeffBuffer[idx] -= (1 << Al);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    break; // End of block
+                                                } else {
+                                                    // ZRL: Skip 16 zeroes
+                                                    if (Ah === 0) {
+                                                        k += 15; // Simple skip
+                                                    } else {
+                                                        // Refine while skipping
+                                                        let z = 0;
+                                                        while (z < 16 && k <= Se) {
+                                                            const idx = blockOffset + ZZ[k];
+                                                            if (coeffBuffer[idx] !== 0) {
+                                                                let bit = nb();
+                                                                if (bit === 1) {
+                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                    else coeffBuffer[idx] -= (1 << Al);
+                                                                }
+                                                            } else {
+                                                                z++;
+                                                            }
+                                                            k++;
+                                                        }
+                                                        k--; // Adjust for loop increment
+                                                    }
+                                                }
+                                            } else {
+                                                // Non-zero value
+                                                if (Ah === 0) {
+                                                    // AC First Scan: Skip r zeroes, write val
+                                                    k += r;
+                                                    const val = rv(v);
+                                                    coeffBuffer[blockOffset + ZZ[k]] = val << Al;
+                                                } else {
+                                                    // AC Refine Scan: Skip r NEW zeroes, refining OLD non-zeroes in between
+                                                    let z = 0;
+                                                    while (z < r && k <= Se) {
+                                                        const idx = blockOffset + ZZ[k];
+                                                        if (coeffBuffer[idx] !== 0) {
+                                                            let bit = nb();
+                                                            if (bit === 1) {
+                                                                if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                else coeffBuffer[idx] -= (1 << Al);
+                                                            }
+                                                        } else {
+                                                            z++;
+                                                        }
+                                                        k++;
+                                                    }
+                                                    // Now write the new value (which was zero)
+                                                    const val = rv(v); // returns 0 or 1 usually for refine
+                                                    const idx = blockOffset + ZZ[k];
+                                                    // For refine, val is just the next bit (+1 or -1)
+                                                    coeffBuffer[idx] = (val < 0 ? -1 : 1) * (1 << Al);
+                                                }
+                                            }
+                                            k++;
                                         }
                                     }
                                 }
+                                if (markerFound) break;
                             }
+                            if (markerFound) break;
                         }
-                        if (pos !== 0 && pos > bp) break;
+                        if (markerFound) break;
                     }
-                    if (pos === 0) { while (bp < d.length && d[bp] !== 0xFF) bp++; pos = bp - 1; }
+                    // Update pos to where we stopped
+                    pos = bp;
+                    // Adjust if we overshot into a marker
+                    if (d[pos-2] === 0xFF && d[pos-1] !== 0x00) pos -= 2;
+
+                } else if (marker === M.DHT) {
+                     // Parse DHT in-between scans
+                     const len = (d[pos + 1] << 8) | d[pos + 2];
+                     let subPos = pos + 3, end = pos + 1 + len;
+                     while (subPos < end) {
+                        const info = d[subPos++];
+                        const tc = (info >> 4) & 0x0F, th = info & 0x0F;
+                        const nr = Array.from(d.slice(subPos, subPos + 16)); subPos += 16;
+                        let count = 0; for (let c of nr) count += c;
+                        const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
+                        if (!tables[tc]) tables[tc] = {};
+                        tables[tc][th] = mh(nr, val);
+                     }
+                     pos = end;
+                } else if (marker === M.EOI) {
+                    break;
+                } else {
+                    const len = (d[pos + 1] << 8) | d[pos + 2];
+                    pos += 1 + len;
                 }
-                pos++;
             }
+
             const allBlocks = [];
             for (let i = 0; i < totalBlocks; i++) {
                 const off = i * 64, bTypeIndex = i % blocksPerMCU, bDef = mcuStructure.blocks[bTypeIndex], isChroma = bDef.t === 'C';
