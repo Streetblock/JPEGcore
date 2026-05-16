@@ -1,21 +1,22 @@
 /**
-* JpegCORE - A pure JavaScript JPEG Encoder/Decoder Library
+* JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
 * No external dependencies.
+* * Features:
+* - Encode (RGB -> JPEG)
+* - Decode (JPEG -> RGB via render)
+* - Lossless Transforms (Rotate, Flip without re-compression)
  */
 
-// --- PART 1: JPEG LIBRARY
 const JpegCORE = {
-  // 1. CONSTANTS: Marker, Tables & Standard Definitions
+  // --- 1. CONSTANTS ---
   Constants: {
       MARKERS: {
           SOI: 0xD8, EOI: 0xD9, SOF0: 0xC0, SOF2: 0xC2, DHT: 0xC4,
           DQT: 0xDB, SOS: 0xDA, APP0: 0xE0, COM: 0xFE, RST0: 0xD0, RST7: 0xD7
       },
       ZIG_ZAG: [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63],
-      // Standard Quantization Tables (Luminance & Chrominance)
       QUANT_L: [16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99],
       QUANT_C: [17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99],
-      // Standard Huffman Tables
       HUFFMAN: {
             DC_L_NR: [0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
             DC_L_VAL: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
@@ -34,6 +35,7 @@ const JpegCORE = {
         }
     },
 
+    // --- 2. ANALYSIS ---
     Analysis: {
         parseStructure: function(d) {
             const M = JpegCORE.Constants.MARKERS;
@@ -159,163 +161,52 @@ const JpegCORE = {
                 if (rawHuff[1][1]) { extractedHuff.c_ac = rawHuff[1][1]; foundCustom = true; } else if (rawHuff[1][0]) extractedHuff.c_ac = rawHuff[1][0];
 
                 if (foundCustom) infoStr += "[Huffman:Custom] "; else infoStr += "[Huffman:Std] ";
-                if (infoStr) { const d = document.getElementById('metaInfo'); d.innerText = "SOURCE: " + infoStr; d.classList.remove('hidden'); }
-                AppState.detectedMode = detectedSamp;
-                AppState.detectedHuffman = foundCustom ? extractedHuff : null;
-                AppState.detectedMetaSegments = meta;
-                if (qtL && qtC) AppState.engine = new JpegCORE.Encoder(0, qtL, qtC);
-            } catch (e) { console.error(e); }
+                // Optional UI log if needed
+                // if (infoStr) { const d = document.getElementById('metaInfo'); if(d) d.innerText = "SOURCE: " + infoStr; }
+
+                // Return gathered data for the encoder to reuse
+                return {
+                    detectedMode: detectedSamp,
+                    detectedHuffman: foundCustom ? extractedHuff : null,
+                    detectedMetaSegments: meta,
+                    customQtL: qtL,
+                    customQtC: qtC
+                };
+            } catch (e) { console.error(e); return null; }
         }
     },
 
+    // --- 3. DECODER ---
     Decoder: {
+        // Corrected IDCT Class
         IDCT: class {
-          constructor() {
-              this.base = [];
-              // Precompute cosine table for IDCT (Inverse)
-              for (let u = 0; u < 8; u++) {
-                  this.base[u] = [];
-                  for (let x = 0; x < 8; x++) {
-                      // Normalization factors (C)
-                      let Cu = (u === 0) ? 1 / Math.sqrt(2) : 1;
-                      this.base[u][x] = Cu * Math.cos(((2 * x + 1) * u * Math.PI) / 16);
-                  }
-              }
-          }
-
-          // Convert 8x8 Frequency Block -> 8x8 Spatial Block
-          transform(coeffs, quantTable) {
-              const out = new Float32Array(64);
-              for (let y = 0; y < 8; y++) {
-                  for (let x = 0; x < 8; x++) {
-                      let sum = 0;
-                      for (let u = 0; u < 8; u++) {
-                          for (let v = 0; v < 8; v++) {
-                              // 1. De-Quantize: coeff * Q-Table value
-                              // 2. IDCT Formula: sum( C(u)C(v) * F(u,v) * cos * cos )
-                              const coefVal = coeffs[u * 8 + v] * quantTable[u * 8 + v];
-                              sum += coefVal * this.base[u][x] * this.base[v][y];
-                          }
-                      }
-                      out[y * 8 + x] = sum * 0.25;
-                  }
-              }
-              return out;
-          }
-        };
-
-        render: function(decoded) {
-            const w = decoded.w;
-            const h = decoded.h;
-            const mode = decoded.mode;
-            const blocks = decoded.blocks;
-
-            // 1. Setup Buffers
-            const finalData = new Uint8ClampedArray(w * h * 4); // RGBA buffer
-            const idctEngine = new JpegCORE.Decoder.IDCT();
-            const SM = JpegCORE.Constants.SAMPLE_MODES[mode];
-
-            // Use Standard Quant Tables (Fallback since DQT wasn't parsed)
-            const Q_L = JpegCORE.Constants.QUANT_L;
-            const Q_C = JpegCORE.Constants.QUANT_C;
-
-            // 2. Iterate over MCUs (Minimum Coded Units)
-            const mcuW = SM.hMax * 8;
-            const mcuH = SM.vMax * 8;
-            const cols = Math.ceil(w / mcuW);
-            const rows = Math.ceil(h / mcuH);
-            const blocksPerMCU = SM.blocks.length;
-
-            let bIdx = 0; // Index into the linear 'blocks' array
-
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
-                    // Process one MCU
-                    const spatialBlocks = [];
-
-                    // 2a. IDCT all blocks in this MCU
-                    for (let b = 0; b < blocksPerMCU; b++) {
-                        if (bIdx >= blocks.length) break;
-                        const rawBlock = blocks[bIdx++];
-                        const qTable = (rawBlock.type === 'C') ? Q_C : Q_L;
-
-                        // Perform IDCT
-                        spatialBlocks.push({
-                            pixels: idctEngine.transform(rawBlock.data, qTable),
-                            def: SM.blocks[b]
-                        });
-                    }
-
-                    // 2b. Draw pixels for this MCU
-                    const originX = c * mcuW;
-                    const originY = r * mcuH;
-
-                    for (let y = 0; y < mcuH; y++) {
-                        for (let x = 0; x < mcuW; x++) {
-                            const absX = originX + x;
-                            const absY = originY + y;
-                            if (absX >= w || absY >= h) continue;
-
-                            // Find Y value
-                            // Determine which Y-block in the MCU covers this pixel
-                            // (Logic: Map x,y relative to MCU into block indices)
-                            let Y = 0, Cb = 0, Cr = 0;
-
-                            // Fetch Y
-                            for (let sb of spatialBlocks) {
-                                if (sb.def.t === 'Y') {
-                                    // Is pixel (x,y) inside this 8x8 block?
-                                    const bxStart = sb.def.dx * 8;
-                                    const byStart = sb.def.dy * 8;
-                                    if (x >= bxStart && x < bxStart + 8 && y >= byStart && y < byStart + 8) {
-                                        Y = sb.pixels[(y - byStart) * 8 + (x - bxStart)];
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // Fetch Chroma (Simple Nearest Neighbor for upsampling)
-                            // Cb/Cr blocks cover larger areas in 4:2:0
-                            for (let sb of spatialBlocks) {
-                                if (sb.def.t === 'C') {
-                                    // Scale down pixel coord to find match in 8x8 chroma block
-                                    // (e.g. in 4:2:0, 16x16 pixels map to 8x8 chroma, so divide coords by 2)
-                                    const scaleX = SM.hMax;
-                                    const scaleY = SM.vMax;
-                                    const cx = Math.floor(x / scaleX);
-                                    const cy = Math.floor(y / scaleY);
-
-                                    if (cx < 8 && cy < 8) {
-                                        const val = sb.pixels[cy * 8 + cx];
-                                        if (sb.def.c === 0) Cb = val; // Cb
-                                        else Cr = val; // Cr
-                                    }
-                                }
-                            }
-
-                            // 3. Color Convert (YCbCr -> RGB)
-                            // (Values are centered at 0 from IDCT, so usually we add 128,
-                            // but the math below assumes standard centered shift)
-                            const pixelY = Y + 128;
-                            const pixelCb = Cb;
-                            const pixelCr = Cr;
-
-                            const R = pixelY + 1.402 * pixelCr;
-                            const G = pixelY - 0.344136 * pixelCb - 0.714136 * pixelCr;
-                            const B = pixelY + 1.772 * pixelCb;
-
-                            const idx = (absY * w + absX) * 4;
-                            finalData[idx] = R;
-                            finalData[idx + 1] = G;
-                            finalData[idx + 2] = B;
-                            finalData[idx + 3] = 255; // Alpha
-                        }
+            constructor() {
+                this.base = [];
+                for (let u = 0; u < 8; u++) {
+                    this.base[u] = [];
+                    for (let x = 0; x < 8; x++) {
+                        let Cu = (u === 0) ? 1 / Math.sqrt(2) : 1;
+                        this.base[u][x] = Cu * Math.cos(((2 * x + 1) * u * Math.PI) / 16);
                     }
                 }
             }
-
-            return new ImageData(finalData, w, h);
-        };
+            transform(coeffs, quantTable) {
+                const out = new Float32Array(64);
+                for (let y = 0; y < 8; y++) {
+                    for (let x = 0; x < 8; x++) {
+                        let sum = 0;
+                        for (let u = 0; u < 8; u++) {
+                            for (let v = 0; v < 8; v++) {
+                                const coefVal = coeffs[u * 8 + v] * quantTable[u * 8 + v];
+                                sum += coefVal * this.base[u][x] * this.base[v][y];
+                            }
+                        }
+                        out[y * 8 + x] = sum * 0.25;
+                    }
+                }
+                return out;
+            }
+        },
 
         extractBlocks: async function(file) {
             const buf = await file.arrayBuffer();
@@ -403,9 +294,223 @@ const JpegCORE = {
                 allBlocks.push({ data: coeffBuffer.slice(off, off + 64), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
             }
             return { blocks: allBlocks, w, h, mode: finalMode };
+        },
+
+        render: function(decoded) {
+            const w = decoded.w;
+            const h = decoded.h;
+            const mode = decoded.mode;
+            const blocks = decoded.blocks;
+
+            const finalData = new Uint8ClampedArray(w * h * 4);
+            const idctEngine = new JpegCORE.Decoder.IDCT();
+            const SM = JpegCORE.Constants.SAMPLE_MODES[mode];
+            const Q_L = JpegCORE.Constants.QUANT_L;
+            const Q_C = JpegCORE.Constants.QUANT_C;
+
+            const mcuW = SM.hMax * 8;
+            const mcuH = SM.vMax * 8;
+            const cols = Math.ceil(w / mcuW);
+            const rows = Math.ceil(h / mcuH);
+            const blocksPerMCU = SM.blocks.length;
+
+            let bIdx = 0;
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const spatialBlocks = [];
+                    for (let b = 0; b < blocksPerMCU; b++) {
+                        if (bIdx >= blocks.length) break;
+                        const rawBlock = blocks[bIdx++];
+                        const qTable = (rawBlock.type === 'C') ? Q_C : Q_L;
+                        spatialBlocks.push({
+                            pixels: idctEngine.transform(rawBlock.data, qTable),
+                            def: SM.blocks[b]
+                        });
+                    }
+                    const originX = c * mcuW;
+                    const originY = r * mcuH;
+                    for (let y = 0; y < mcuH; y++) {
+                        for (let x = 0; x < mcuW; x++) {
+                            const absX = originX + x;
+                            const absY = originY + y;
+                            if (absX >= w || absY >= h) continue;
+                            let Y = 0, Cb = 0, Cr = 0;
+                            for (let sb of spatialBlocks) {
+                                if (sb.def.t === 'Y') {
+                                    const bxStart = sb.def.dx * 8;
+                                    const byStart = sb.def.dy * 8;
+                                    if (x >= bxStart && x < bxStart + 8 && y >= byStart && y < byStart + 8) {
+                                        Y = sb.pixels[(y - byStart) * 8 + (x - bxStart)];
+                                        break;
+                                    }
+                                }
+                            }
+                            for (let sb of spatialBlocks) {
+                                if (sb.def.t === 'C') {
+                                    const scaleX = SM.hMax; const scaleY = SM.vMax;
+                                    const cx = Math.floor(x / scaleX);
+                                    const cy = Math.floor(y / scaleY);
+                                    if (cx < 8 && cy < 8) {
+                                        const val = sb.pixels[cy * 8 + cx];
+                                        if (sb.def.c === 0) Cb = val; else Cr = val;
+                                    }
+                                }
+                            }
+                            const pixelY = Y + 128;
+                            const R = pixelY + 1.402 * Cr;
+                            const G = pixelY - 0.344136 * Cb - 0.714136 * Cr;
+                            const B = pixelY + 1.772 * Cb;
+                            const idx = (absY * w + absX) * 4;
+                            finalData[idx] = R; finalData[idx + 1] = G; finalData[idx + 2] = B; finalData[idx + 3] = 255;
+                        }
+                    }
+                }
+            }
+            return new ImageData(finalData, w, h);
         }
     },
 
+    // --- 4. TRANSFORMER (NEW) ---
+    Transformer: {
+        _transformCoeffs: function(data, op) {
+            const out = new Int32Array(64);
+            // op: 0=FlipH, 1=FlipV, 2=Transpose
+            for (let y = 0; y < 8; y++) {
+                for (let x = 0; x < 8; x++) {
+                    let val = 0;
+                    if (op === 2) val = data[x * 8 + y]; // Transpose
+                    else val = data[y * 8 + x];
+
+                    // Flip H: Odd columns negate
+                    if (op === 0 && (x % 2 !== 0)) val = -val;
+                    // Flip V: Odd rows negate
+                    if (op === 1 && (y % 2 !== 0)) val = -val;
+                    // Transpose: No negation needed for simple transpose?
+                    // Wait, Rotate 90 is Transpose + FlipH.
+
+                    out[y * 8 + x] = val;
+                }
+            }
+            return out;
+        },
+
+        flipH: function(captured) {
+            // Logic: Reverse Order of MCUs in row + Flip Coeffs Horizontally
+            // For 4:2:0: Also swap Y0<->Y1 and Y2<->Y3 within MCU
+            return this._runGridTransform(captured, 'FLIP_H');
+        },
+
+        flipV: function(captured) {
+            // Logic: Reverse Order of Rows + Flip Coeffs Vertically
+            return this._runGridTransform(captured, 'FLIP_V');
+        },
+
+        rotate90: function(captured) {
+            // 90 CW = Transpose + Flip Horizontal
+            return this._runGridTransform(captured, 'ROT_90');
+        },
+
+        _runGridTransform: function(captured, mode) {
+            const sm = JpegCORE.Constants.SAMPLE_MODES[captured.mode];
+            const mcuW = sm.hMax * 8, mcuH = sm.vMax * 8;
+            const cols = Math.ceil(captured.w / mcuW);
+            const rows = Math.ceil(captured.h / mcuH);
+            const blocksPerMCU = sm.blocks.length;
+
+            const newBlocks = [];
+            let newW = captured.w, newH = captured.h;
+            let newCols = cols, newRows = rows;
+
+            if (mode === 'ROT_90') {
+                newW = captured.h; newH = captured.w;
+                newCols = rows; newRows = cols;
+            }
+
+            // Helper to get MCU array from flat list
+            const getMCU = (c, r) => {
+                const idx = (r * cols + c) * blocksPerMCU;
+                return captured.blocks.slice(idx, idx + blocksPerMCU);
+            };
+
+            for (let r = 0; r < newRows; r++) {
+                for (let c = 0; c < newCols; c++) {
+                    let srcC = c, srcR = r;
+                    let transformOp = -1; // 0=H, 1=V, 2=Transp
+
+                    if (mode === 'FLIP_H') {
+                        srcC = cols - 1 - c;
+                        transformOp = 0;
+                    } else if (mode === 'FLIP_V') {
+                        srcR = rows - 1 - r;
+                        transformOp = 1;
+                    } else if (mode === 'ROT_90') {
+                        // 90 CW: New(x,y) comes from Old(y, H-1-x)
+                        // So srcCol = r, srcRow = (oldCols - 1 - c)
+                        srcC = r;
+                        srcR = cols - 1 - c;
+                        transformOp = 2; // Transpose first... then we flip H later?
+                        // Actually ROT90 is Transpose Coeffs THEN Flip H Coeffs?
+                        // Simplified: Transpose Coeffs, and reorder blocks appropriately
+                    }
+
+                    const srcMCU = getMCU(srcC, srcR);
+                    const newMCU = new Array(blocksPerMCU);
+
+                    // Reorder blocks INSIDE the MCU (Crucial for 4:2:0)
+                    for (let b = 0; b < blocksPerMCU; b++) {
+                        let targetB = b;
+                        const bDef = sm.blocks[b];
+
+                        // Internal reordering logic
+                        if (captured.mode === '420') {
+                            // Y Blocks: 0=TL, 1=TR, 2=BL, 3=BR
+                            if (bDef.t === 'Y') {
+                                if (mode === 'FLIP_H') {
+                                    if (b === 0) targetB = 1; else if (b === 1) targetB = 0;
+                                    else if (b === 2) targetB = 3; else if (b === 3) targetB = 2;
+                                } else if (mode === 'FLIP_V') {
+                                    if (b === 0) targetB = 2; else if (b === 2) targetB = 0;
+                                    else if (b === 1) targetB = 3; else if (b === 3) targetB = 1;
+                                } else if (mode === 'ROT_90') {
+                                    // 0 1 -> 2 0
+                                    // 2 3 -> 3 1
+                                    if (b === 0) targetB = 1; else if (b === 1) targetB = 3;
+                                    else if (b === 3) targetB = 2; else if (b === 2) targetB = 0;
+                                }
+                            }
+                        }
+
+                        // Apply Coefficient Transform
+                        let newData = srcMCU[b].data;
+                        if (mode === 'ROT_90') {
+                            // 90 is special: Transpose THEN FlipH (on rows)
+                            // We do this manually:
+                            const transposed = this._transformCoeffs(srcMCU[b].data, 2);
+                            newData = this._transformCoeffs(transposed, 0); // Flip H
+                        } else {
+                            newData = this._transformCoeffs(srcMCU[b].data, transformOp);
+                        }
+
+                        newMCU[targetB] = {
+                            data: newData,
+                            type: srcMCU[b].type,
+                            comp: srcMCU[b].comp
+                        };
+                    }
+
+                    // Add reordered/transformed MCU to linear list
+                    for(let b=0; b<blocksPerMCU; b++) newBlocks.push(newMCU[b]);
+                }
+            }
+
+            captured.blocks = newBlocks;
+            captured.w = newW;
+            captured.h = newH;
+            return captured;
+        }
+    },
+
+    // --- 5. ENCODER ---
     Encoder: class {
         constructor(quality, customL, customC) {
             const C = JpegCORE.Constants;
@@ -513,9 +618,7 @@ const JpegCORE = {
             }
             if (z > 0) this.wh(ha, 0); return b[0];
         }
-
         wh(t, v) { const e = t[v]; this.wbt(e.c, e.l); }
-
         wbt(b, l) { for (let i = l - 1; i >= 0; i--) { this.byte = (this.byte << 1) | ((b >> i) & 1); this.cnt++; if (this.cnt === 8) { this.buf.push(this.byte); if (this.byte === 0xFF) this.buf.push(0); this.byte = 0; this.cnt = 0; } } }
     }
 };
