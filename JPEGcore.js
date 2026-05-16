@@ -1,9 +1,9 @@
 /**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
-* Extended Version 1.8.1 Faster (Loeffler Int Integration)
+* Extended Version 1.8.3 JIT Turbo
 * * CORES:
 * - Decoder: Added Loeffler Integer IDCT (Standard), Naive IDCT (Legacy/Reference),
-*            Fixed IDCT amplitude/saturation bug (v1.7.5), Robust Mode(v1.7.8)
+* Fixed IDCT amplitude/saturation bug (v1.7.5), Robust Mode(v1.7.8)
 * - Encoder: ZigZag order fix for saving (v1.7.4), enfoceNewQuality (1.7.7)
 * * * Features  1.7.6:
 * - NEW: Quantization Crush (Deep Fry effect)
@@ -229,16 +229,15 @@ const JpegCORE = {
 
     // Decoder Logic: v1.8.0 (Reliable Progressive/Baseline)
     // Memory/IDCT: v1.8.1 (Zero-Alloc, Fast)
+    // Huffman Fix: v1.8.2 (Tree-based, no strings)
+    // JIT Fix: v1.8.3 (Int-based Status Codes)
 
     /**
-     * JpegCORE v1.8.1 - TURBO EDITION
+     * JpegCORE v1.8.3 - JIT TURBO
      * * Performance Update:
-     * 1. Huffman Decoding: Replaced String-concatenation with Lookup Tables (LUT) + Standard Fallback.
-     * - Codes <= 8 bits: O(1) Instant Lookup.
-     * - Codes > 8 bits: Standard mincode/maxcode traversal (no strings).
-     * 2. Bit Reading: Implemented a 32-bit internal buffer (reduces IO reads by 32x).
-     * 3. Renderer: Replaced Division operations with Bit-Shifting.
-     * 4. Architecture: Retained JpegCORE's 1.8.1 Zero-Alloc flat buffer strategy.
+     * 1. Huffman Decoding: Removed String Returns ('MARKER', 'RST').
+     * Uses Integers (-1, -2) for monomorphic return types.
+     * 2. Renderer: Optimized inner loop pointer arithmetic (removed multiplication).
      */
 
      Decoder: {
@@ -332,13 +331,16 @@ const JpegCORE = {
             }
         },
 
-        // --- 2. HYBRID DECODER (Robust Parsing + Flat Buffer) ---
+        // --- 2. HYBRID DECODER (Baseline Fix + Progressive Fix) ---
         extractBlocksStruct: async function(file) {
             try {
                 const buf = await file.arrayBuffer();
                 const d = new Uint8Array(buf);
                 const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG, SM = JpegCORE.Constants.SAMPLE_MODES;
                 const H = JpegCORE.Constants.HUFFMAN;
+
+                const STAT_MARKER = -1;
+                const STAT_RST = -2;
 
                 // --- Robust Bit Reader ---
                 let bp = 0, bb = 0, bc = 0;
@@ -350,9 +352,9 @@ const JpegCORE = {
                             if (bp >= d.length) return null;
                             let next = d[bp];
                             if (next === 0) { bp++; }
-                            else if (next >= 0xD0 && next <= 0xD7) { bp++; return 'RST'; }
+                            else if (next >= 0xD0 && next <= 0xD7) { bp++; return STAT_RST; }
                             else if (next === M.EOI) { return null; }
-                            else { return 'MARKER'; }
+                            else { return STAT_MARKER; }
                         }
                         bb = b; bc = 8;
                     }
@@ -365,19 +367,21 @@ const JpegCORE = {
                     let v = 0;
                     for (let i = 0; i < l; i++) {
                         const b = nb();
-                        if (b === null) return 0;
+                        if (b === STAT_MARKER || b === STAT_RST || b === null) return null;
                         v = (v << 1) | b;
                     }
                     return v;
                 };
 
-                const rh = (m) => {
-                    let k = "", safety = 0;
-                    while (k.length < 16 && safety++ < 32) {
+                const rh = (node) => {
+                    let curr = node;
+                    let safety = 0;
+                    while (safety++ < 32) {
                         const b = nb();
-                        if (b === 'MARKER' || b === 'RST' || b === null) return b;
-                        k += b;
-                        if (m[k] !== undefined) return m[k];
+                        if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                        curr = curr[b];
+                        if (typeof curr === 'number') return curr;
+                        if (curr === undefined) return null;
                     }
                     return null;
                 };
@@ -386,27 +390,35 @@ const JpegCORE = {
                     let v = 0;
                     for (let i = 0; i < l; i++) {
                         const b = nb();
-                        if (b === 'MARKER' || b === 'RST' || b === null) return null;
+                        if (b === STAT_MARKER || b === STAT_RST || b === null) return null;
                         v = (v << 1) | b;
                     }
                     return v < (1 << (l - 1)) ? v + (-1 << l) + 1 : v;
                 };
 
                 const mh = (L, V) => {
-                    let t = {}, c = 0, p = 0;
+                    const root = [];
+                    let c = 0, p = 0;
                     for (let i = 1; i <= 16; i++) {
                         for (let j = 0; j < L[i - 1]; j++) {
-                            let k = "";
-                            for (let x = i - 1; x >= 0; x--) k += (c >> x) & 1;
-                            if(p < V.length) t[k] = V[p++];
+                            let curr = root;
+                            for (let x = i - 1; x >= 0; x--) {
+                                const bit = (c >> x) & 1;
+                                if (x === 0) {
+                                    if(p < V.length) curr[bit] = V[p++];
+                                } else {
+                                    if (curr[bit] === undefined) curr[bit] = [];
+                                    curr = curr[bit];
+                                }
+                            }
                             c++;
                         }
                         c <<= 1;
                     }
-                    return t;
+                    return root;
                 };
 
-                // --- Parser Start ---
+                // --- Parser Header ---
                 if (d.length < 2) throw new Error("File too short");
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
                 let tables = { 0: { 0: mh(H.DC_L_NR, H.DC_L_VAL), 1: mh(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: mh(H.AC_L_NR, H.AC_L_VAL), 1: mh(H.AC_C_NR, H.AC_C_VAL) } };
@@ -414,14 +426,13 @@ const JpegCORE = {
 
                 if (d[0] === 0xFF && d[1] === M.SOI) pos = 2;
 
-                // --- Header Loop ---
                 while (pos < d.length - 1) {
                     if (d[pos] !== 0xFF) { pos++; continue; }
                     while (d[pos] === 0xFF && pos < d.length) pos++;
                     if (pos >= d.length) break;
                     const marker = d[pos];
 
-                    if (marker === M.SOS) break; // Stop at SOS to start scan logic
+                    if (marker === M.SOS) break;
 
                     if (pos + 2 >= d.length) break;
                     const len = (d[pos + 1] << 8) | d[pos + 2];
@@ -447,7 +458,7 @@ const JpegCORE = {
                             const ySamp = compMapList[0].samp;
                             if (ySamp === 0x22) finalMode = '420';
                             else if (ySamp === 0x21) finalMode = '422';
-                            else finalMode = '444'; // default to 444 for others
+                            else finalMode = '444';
                             mcuStructure = SM[finalMode];
                         }
                     } else if (marker === M.DHT) {
@@ -476,7 +487,7 @@ const JpegCORE = {
 
                 if (!w || !h || !mcuStructure) return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
 
-                // --- Setup Flat Buffer ---
+                // --- Setup Buffer ---
                 const blocksPerMCU = mcuStructure.blocks.length;
                 const cols = Math.ceil(w / (mcuStructure.hMax * 8));
                 const rows = Math.ceil(h / (mcuStructure.vMax * 8));
@@ -496,7 +507,7 @@ const JpegCORE = {
                 if (pos < d.length && d[pos] !== 0xFF && d[pos-1] === 0xFF) pos--;
                 let predDC = [0, 0, 0];
 
-                // --- Scan Loop (Handles Progressive + Multi-Scan + Interleaved) ---
+                // --- Scan Loop ---
                 try {
                     while (pos < d.length - 1) {
                         if (d[pos] !== 0xFF) { pos++; continue; }
@@ -528,7 +539,7 @@ const JpegCORE = {
                             let successiveACNextValue = 0;
                             let acRun = 0;
 
-                            if (Ss === 0) predDC = [0,0,0]; // Reset DC predictors for new scan if starting at 0
+                            if (Ss === 0) predDC = [0,0,0];
 
                             const typeToIndices = {};
                             for (let b = 0; b < blocksPerMCU; b++) {
@@ -545,24 +556,39 @@ const JpegCORE = {
                                     if (!blkIndices) continue;
 
                                     for (let bIdx of blkIndices) {
+                                        if (successiveACState === 0 && eob_run === 0) acRun = 0;
+
                                         const blockOffset = (m * blocksPerMCU + bIdx) * 64;
                                         if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
 
+                                        // --- DC SCAN ---
                                         if (Ss === 0) {
                                             const tbl = (tables[0][c.dcTbl]) ? tables[0][c.dcTbl] : tables[0][0];
                                             if (!tbl) { markerFound = true; break; }
 
                                             if (Ah === 0) {
                                                 let s = rh(tbl);
-                                                if (s === 'RST') { predDC[c.type] = 0; bc = 0; eob_run = 0; successiveACState = 0; s = rh(tbl); }
-                                                if (s === 'MARKER' || s === null) { markerFound = true; break; }
+                                                // === RST FIX FÜR BASELINE ===
+                                                if (s === STAT_RST) {
+                                                    // Wenn RST gefunden wird, MÜSSEN ALLE DC-Werte auf 0 resettet werden!
+                                                    // Nicht nur der aktuelle (c.type).
+                                                    predDC = [0, 0, 0];
+                                                    bc = 0;
+                                                    eob_run = 0;
+                                                    successiveACState = 0;
+                                                    s = rh(tbl);
+                                                }
+                                                // ==============================
+
+                                                if (s === STAT_MARKER || s === null) { markerFound = true; break; }
+
                                                 let diff = 0; if (s !== 0) diff = rv(s);
                                                 if (diff === null) { markerFound = true; break; }
                                                 predDC[c.type] += diff;
                                                 coeffBuffer[blockOffset] = predDC[c.type] << Al;
                                             } else {
                                                 let bit = nb();
-                                                if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
+                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
                                                 if (bit === 1) {
                                                     if (coeffBuffer[blockOffset] >= 0) coeffBuffer[blockOffset] += (1 << Al);
                                                     else coeffBuffer[blockOffset] -= (1 << Al);
@@ -570,24 +596,35 @@ const JpegCORE = {
                                             }
                                         }
 
+                                        // --- AC SCAN ---
                                         if (Se > 0) {
                                             const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
                                             if (!tbl) { markerFound = true; break; }
 
                                             if (Ah === 0) {
+                                                // --- AC FIRST SCAN ---
                                                 if (eob_run > 0) {
                                                     eob_run--;
                                                 } else {
                                                     let k = Math.max(Ss, 1);
                                                     while (k <= Se) {
                                                         let s = rh(tbl);
-                                                        if (s === 'RST') { bc=0; eob_run=0; s = rh(tbl); }
-                                                        if (s === 'MARKER' || s === null) { markerFound = true; break; }
+                                                        // === RST FIX FÜR AC LOOP ===
+                                                        if (s === STAT_RST) {
+                                                            predDC = [0, 0, 0]; // Safety Reset
+                                                            bc=0; eob_run=0;
+                                                            s = rh(tbl);
+                                                        }
+                                                        // ===========================
+
+                                                        if (s === STAT_MARKER || s === null) { markerFound = true; break; }
+
                                                         const r = s >> 4, v = s & 15;
                                                         if (v === 0) {
                                                             if (r < 15) {
-                                                                eob_run = (1 << r) + readRawBits(r);
-                                                                if (eob_run === null) { eob_run=0; markerFound=true; break; }
+                                                                const extra = readRawBits(r);
+                                                                if (extra === null) { eob_run=0; markerFound=true; break; }
+                                                                eob_run = (1 << r) + extra;
                                                                 eob_run--; break;
                                                             } else { k += 15; }
                                                         } else {
@@ -600,61 +637,98 @@ const JpegCORE = {
                                                     }
                                                 }
                                             } else {
+                                                // --- AC SUCCESSIVE (Progressive) ---
                                                 let k = Math.max(Ss, 1);
+
+                                                if (eob_run > 0) {
+                                                    successiveACState = 4;
+                                                } else {
+                                                    successiveACState = 0;
+                                                    acRun = 0;
+                                                }
+
                                                 while (k <= Se) {
                                                     const z = ZZ[k];
                                                     const idx = blockOffset + z;
+
                                                     switch (successiveACState) {
                                                         case 0:
                                                             let rs = rh(tbl);
-                                                            if (rs === 'RST') { bc=0; eob_run=0; successiveACState=0; rs = rh(tbl); }
-                                                            if (rs === 'MARKER' || rs === null) { markerFound = true; break; }
+                                                            // RST Handling auch hier
+                                                            if (rs === STAT_RST) {
+                                                                predDC = [0,0,0];
+                                                                bc=0; eob_run=0; successiveACState=0;
+                                                                rs = rh(tbl);
+                                                            }
+
+                                                            if (rs === STAT_MARKER || rs === null) { markerFound = true; break; }
+
                                                             const s = rs & 15, r = rs >> 4;
                                                             if (s === 0) {
                                                                 if (r < 15) {
-                                                                    eob_run = (1 << r) + readRawBits(r);
-                                                                    if (eob_run === null) { markerFound=true; break; }
+                                                                    const extra = readRawBits(r);
+                                                                    if (extra === null) { markerFound=true; break; }
+                                                                    eob_run = (1 << r) + extra;
                                                                     successiveACState = 4;
-                                                                } else { acRun = 16; successiveACState = 1; }
+                                                                } else {
+                                                                    acRun = 16;
+                                                                    successiveACState = 1;
+                                                                }
                                                             } else {
+                                                                if (s !== 1) throw new Error("invalid ACn encoding");
                                                                 successiveACNextValue = rv(s);
                                                                 if (successiveACNextValue === null) { markerFound=true; break; }
                                                                 successiveACState = (r > 0) ? 2 : 3;
                                                                 acRun = r;
                                                             }
                                                             continue;
+
                                                         case 1: case 2:
                                                             if (coeffBuffer[idx] !== 0) {
                                                                 let bit = nb();
-                                                                if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) { if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al); else coeffBuffer[idx] -= (1 << Al); }
+                                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
+                                                                if (bit === 1) {
+                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                    else coeffBuffer[idx] -= (1 << Al);
+                                                                }
                                                             } else {
                                                                 acRun--;
                                                                 if (acRun === 0) successiveACState = (successiveACState === 2) ? 3 : 0;
                                                             }
                                                             break;
+
                                                         case 3:
                                                             if (coeffBuffer[idx] !== 0) {
                                                                 let bit = nb();
-                                                                if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) { if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al); else coeffBuffer[idx] -= (1 << Al); }
+                                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
+                                                                if (bit === 1) {
+                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                    else coeffBuffer[idx] -= (1 << Al);
+                                                                }
                                                             } else {
                                                                 coeffBuffer[idx] = successiveACNextValue << Al;
                                                                 successiveACState = 0;
                                                             }
                                                             break;
+
                                                         case 4:
                                                             if (coeffBuffer[idx] !== 0) {
                                                                 let bit = nb();
-                                                                if (bit === 'MARKER' || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) { if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al); else coeffBuffer[idx] -= (1 << Al); }
+                                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
+                                                                if (bit === 1) {
+                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
+                                                                    else coeffBuffer[idx] -= (1 << Al);
+                                                                }
                                                             }
                                                             break;
                                                     }
                                                     if (markerFound) break;
                                                     k++;
                                                 }
-                                                if (successiveACState === 4) { eob_run--; if (eob_run === 0) successiveACState = 0; }
+
+                                                if (successiveACState === 4) {
+                                                    eob_run--;
+                                                }
                                             }
                                         }
                                         if (markerFound) break;
@@ -803,7 +877,9 @@ const JpegCORE = {
                     // basierend auf dem Modus (4:4:4 vs 4:2:2 vs 4:2:0)
 
                     for (let y = 0; y < maxY; y++) {
-                        const rowOffset = rowBase + (y * w * 4) + (ox * 4);
+                        // OPTIMIZED POINTER ARITHMETIC (Removed x*4 multiplication inside loop)
+                        // Old: const rowOffset = rowBase + (y * w * 4) + (ox * 4);
+                        let ptr = rowBase + (y * w * 4) + (ox * 4);
 
                         for (let x = 0; x < maxX; x++) {
                             let Y, Cb, Cr;
@@ -857,11 +933,11 @@ const JpegCORE = {
                             const adjCb = Cb - 128;
                             const adjCr = Cr - 128;
 
-                            const ptr = rowOffset + (x * 4);
-                            finalData[ptr]     = Y + (1.402 * adjCr);
-                            finalData[ptr + 1] = Y - (0.344136 * adjCb) - (0.714136 * adjCr);
-                            finalData[ptr + 2] = Y + (1.772 * adjCb);
-                            finalData[ptr + 3] = 255;
+                            // Pointer increment instead of multiplication (ptr = rowOffset + x*4)
+                            finalData[ptr++] = Y + (1.402 * adjCr);
+                            finalData[ptr++] = Y - (0.344136 * adjCb) - (0.714136 * adjCr);
+                            finalData[ptr++] = Y + (1.772 * adjCb);
+                            finalData[ptr++] = 255;
                         }
                     }
                 }
