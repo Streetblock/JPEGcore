@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JpegCORE Workbench</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="JpegCORE1.8.0.5.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #1a1a1a; color: #e5e5e5; }
+        .panel { background-color: #262626; border: 1px solid #404040; }
+        canvas { background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEgAACxIB0t1+/AAAABZ0RVh0Q3JlYXRpb24gVGltZQAxMC8yOS8xMiKqq3kAAAAcdEVYdFNvZnR3YXJlAEFkb2JlIEZpcmV3b3JrcyBDUzbovLKMAAAADUlEQVQ4jbXMsQ0AAAjDQPv/ktOQqCjQA7J02Zs2/4z2YwFFAY8EUx4F7QAAAABJRU5ErkJggg=='); }
+        /* Custom range slider styling */
+        input[type=range] { -webkit-appearance: none; background: transparent; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #3b82f6; margin-top: -6px; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; background: #4b5563; border-radius: 2px; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="bg-black border-b border-gray-800 p-4 flex justify-between items-center shadow-md z-10">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-blue-600 rounded flex items-center justify-center font-bold text-lg">J</div>
+            <h1 class="text-xl font-bold tracking-tight">JpegCORE <span class="text-blue-500 font-normal">Workbench</span></h1>
+        </div>
+        <div class="text-xs text-gray-500 font-mono" id="statusInfo">Bereit.</div>
+        <a href="#" id="downloadBtn" class="hidden bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-medium transition">
+            Bild Speichern (.jpg)
+        </a>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex overflow-hidden">
+
+        <!-- Left Sidebar: Tools -->
+        <aside class="w-80 panel flex flex-col border-r border-gray-800 overflow-y-auto z-20 shadow-xl">
+
+            <!-- Upload Section -->
+            <div class="p-5 border-b border-gray-700">
+                <div id="dropZone" class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center hover:border-blue-500 hover:bg-gray-800 transition cursor-pointer">
+                    <p class="text-gray-400 text-sm pointer-events-none">Bild hier ablegen<br><span class="text-xs text-gray-600">(oder klicken)</span></p>
+                    <input type="file" id="fileInput" class="hidden" accept="image/jpeg">
+                </div>
+            </div>
+
+            <!-- Analysis Info -->
+            <div class="p-5 border-b border-gray-700 text-sm space-y-2">
+                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Metadaten</h3>
+                <div class="flex justify-between"><span class="text-gray-400">Dimension:</span> <span id="metaDim" class="font-mono text-white">-</span></div>
+                <div class="flex justify-between"><span class="text-gray-400">Subsampling:</span> <span id="metaSub" class="font-mono text-white">-</span></div>
+                <div class="flex justify-between"><span class="text-gray-400">Orientation:</span> <span id="metaOri" class="font-mono text-white">-</span></div>
+            </div>
+
+            <!-- View Options -->
+            <div class="p-5 border-b border-gray-700 space-y-4">
+                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Ansicht (Scale-on-Load)</h3>
+                <select id="scaleSelect" class="w-full bg-black border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-500 outline-none" disabled>
+                    <option value="1.0">100% (Original)</option>
+                    <option value="0.5">50% (Performance)</option>
+                    <option value="0.25">25% (Thumbnail)</option>
+                    <option value="0.125">12.5% (Tiny)</option>
+                </select>
+                <p class="text-[10px] text-gray-500 leading-tight">
+                    Nutzt IDCT-Scaling für extrem schnelles Decodieren bei niedrigeren Auflösungen.
+                </p>
+            </div>
+
+            <!-- Lossless Transforms -->
+            <div class="p-5 border-b border-gray-700 space-y-4">
+                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Verlustfrei</h3>
+                <div class="grid grid-cols-3 gap-2">
+                    <button id="btnRot90" class="bg-gray-700 hover:bg-gray-600 py-2 rounded text-xs transition" disabled>↻ 90°</button>
+                    <button id="btnFlipH" class="bg-gray-700 hover:bg-gray-600 py-2 rounded text-xs transition" disabled>↔ Flip</button>
+                    <button id="btnFlipV" class="bg-gray-700 hover:bg-gray-600 py-2 rounded text-xs transition" disabled>↕ Flip</button>
+                </div>
+            </div>
+
+            <!-- Glitch / Filters -->
+            <div class="p-5 space-y-6">
+                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Glitch Art</h3>
+
+                <!-- Channel Swap -->
+                <div>
+                    <button id="btnSwap" class="w-full bg-purple-900/50 hover:bg-purple-800 text-purple-200 border border-purple-700 py-2 rounded text-sm transition mb-2" disabled>
+                        Kanal-Tausch (Cb/Cr)
+                    </button>
+                    <p class="text-[10px] text-gray-500">Tauscht Blau/Rot-Farbkanäle auf Block-Ebene.</p>
+                </div>
+
+                <!-- Shredder -->
+                <div>
+                    <div class="flex justify-between text-xs mb-1">
+                        <span class="text-gray-300">Quantum Shred</span>
+                        <span id="shredVal" class="text-gray-500 font-mono">Off</span>
+                    </div>
+                    <input type="range" id="rangeShred" min="0" max="63" value="63" class="w-full" disabled>
+                    <p class="text-[10px] text-gray-500 mt-1">Löscht hohe Frequenzen (ZigZag Cutoff).</p>
+                </div>
+
+                <!-- Fuzz -->
+                <div>
+                    <button id="btnFuzz" class="w-full bg-red-900/30 hover:bg-red-800 text-red-200 border border-red-800 py-2 rounded text-sm transition mb-2" disabled>
+                        Cyber Fuzz
+                    </button>
+                    <p class="text-[10px] text-gray-500">Injeziert Rauschen in hohe Frequenzbänder.</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Canvas Area -->
+        <div class="flex-1 bg-gray-900 flex items-center justify-center p-8 overflow-auto relative">
+            <div id="canvasContainer" class="shadow-2xl shadow-black relative">
+                <canvas id="mainCanvas"></canvas>
+            </div>
+            <div id="loadingOverlay" class="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center hidden z-50">
+                <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+
+    /**
+     * WORKBENCH LOGIC
+     */
+    const App = {
+        state: {
+            decoded: null,
+            file: null,
+            meta: null,
+            currentScale: 1.0,
+            originalBlocks: null // To reset glitches
+        },
+        elements: {
+            dropZone: document.getElementById('dropZone'),
+            fileInput: document.getElementById('fileInput'),
+            canvas: document.getElementById('mainCanvas'),
+            status: document.getElementById('statusInfo'),
+            loading: document.getElementById('loadingOverlay'),
+            // Meta
+            mDim: document.getElementById('metaDim'),
+            mSub: document.getElementById('metaSub'),
+            mOri: document.getElementById('metaOri'),
+            // Controls
+            scaleSel: document.getElementById('scaleSelect'),
+            btns: [
+                document.getElementById('btnRot90'),
+                document.getElementById('btnFlipH'),
+                document.getElementById('btnFlipV'),
+                document.getElementById('btnSwap'),
+                document.getElementById('btnFuzz')
+            ],
+            rangeShred: document.getElementById('rangeShred'),
+            valShred: document.getElementById('shredVal'),
+            downloadBtn: document.getElementById('downloadBtn')
+        },
+
+        init() {
+            const els = this.elements;
+
+            // Drag & Drop
+            els.dropZone.addEventListener('click', () => els.fileInput.click());
+            els.dropZone.addEventListener('dragover', (e) => { e.preventDefault(); els.dropZone.classList.add('border-blue-500'); });
+            els.dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); els.dropZone.classList.remove('border-blue-500'); });
+            els.dropZone.addEventListener('drop', (e) => {
+                e.preventDefault(); els.dropZone.classList.remove('border-blue-500');
+                if(e.dataTransfer.files.length) this.loadFile(e.dataTransfer.files[0]);
+            });
+            els.fileInput.addEventListener('change', (e) => {
+                if(e.target.files.length) this.loadFile(e.target.files[0]);
+            });
+
+            // Scale Change
+            els.scaleSel.addEventListener('change', (e) => {
+                this.state.currentScale = parseFloat(e.target.value);
+                this.render();
+            });
+
+            // Transforms
+            els.btns[0].addEventListener('click', () => this.applyTransform('rotate90'));
+            els.btns[1].addEventListener('click', () => this.applyTransform('flipH'));
+            els.btns[2].addEventListener('click', () => this.applyTransform('flipV'));
+
+            // Glitch
+            els.btns[3].addEventListener('click', () => { JpegCORE.Glitch.swapChannels(this.state.decoded); this.render(); });
+            els.btns[4].addEventListener('click', () => { JpegCORE.Glitch.fuzz(this.state.decoded, 32, 50); this.render(); });
+
+            els.rangeShred.addEventListener('input', (e) => {
+                const val = parseInt(e.target.value);
+                els.valShred.innerText = val < 63 ? val : "Off";
+            });
+            els.rangeShred.addEventListener('change', (e) => {
+                const val = parseInt(e.target.value);
+                if (val < 63) {
+                    JpegCORE.Glitch.shred(this.state.decoded, val);
+                    this.render();
+                }
+            });
+
+            // Save
+            els.downloadBtn.addEventListener('click', () => this.save());
+        },
+
+        async loadFile(file) {
+            this.elements.loading.classList.remove('hidden');
+            this.elements.status.innerText = "Analysiere...";
+
+            // 1. Probe
+            const meta = await JpegCORE.Analysis.probe(file);
+            if(!meta) { alert("Ungültiges JPEG"); this.elements.loading.classList.add('hidden'); return; }
+
+            // Update UI Info
+            this.state.meta = meta;
+            this.elements.mSub.innerText = meta.detectedMode;
+            this.elements.mOri.innerText = meta.detectedOrientation || "1 (Normal)";
+
+            // 2. Decode
+            this.elements.status.innerText = "Decodiere...";
+            try {
+                // Yield to UI thread so loading spinner shows
+                await new Promise(r => setTimeout(r, 50));
+                this.state.decoded = await JpegCORE.Decoder.extractBlocks(file);
+
+                // Keep file ref
+                this.state.file = file;
+                this.elements.mDim.innerText = `${this.state.decoded.w} x ${this.state.decoded.h}`;
+
+                // Enable controls
+                this.elements.scaleSel.disabled = false;
+                this.elements.btns.forEach(b => b.disabled = false);
+                this.elements.rangeShred.disabled = false;
+                this.elements.downloadBtn.classList.remove('hidden');
+
+                // Initial Render
+                this.render();
+            } catch(e) {
+                console.error(e);
+                alert("Fehler beim Decodieren: " + e.message);
+            }
+            this.elements.loading.classList.add('hidden');
+        },
+
+        render() {
+            if(!this.state.decoded) return;
+            const t0 = performance.now();
+            try {
+                const imgData = JpegCORE.Decoder.render(this.state.decoded, this.state.currentScale);
+                const t1 = performance.now();
+
+                const cvs = this.elements.canvas;
+                cvs.width = imgData.width;
+                cvs.height = imgData.height;
+                const ctx = cvs.getContext('2d');
+                ctx.putImageData(imgData, 0, 0);
+
+                this.elements.status.innerText = `Render: ${Math.round(t1-t0)}ms @ ${(this.state.currentScale*100)}%`;
+            } catch (e) {
+                console.error(e);
+                this.elements.status.innerText = "Fehler beim Rendern";
+            }
+        },
+
+        applyTransform(type) {
+            if(!this.state.decoded) return;
+            if(type === 'rotate90') JpegCORE.Transformer.rotate90(this.state.decoded);
+            if(type === 'flipH') JpegCORE.Transformer.flipH(this.state.decoded);
+            if(type === 'flipV') JpegCORE.Transformer.flipV(this.state.decoded);
+
+            // Re-render
+            // Update dims in UI if rotated
+            this.elements.mDim.innerText = `${this.state.decoded.w} x ${this.state.decoded.h}`;
+            this.render();
+        },
+
+        save() {
+            if(!this.state.decoded) return;
+            // Use encoder with quality ~90 (standard tables) or pass custom tables from meta if you want strict preservation
+            const encoder = new JpegCORE.Encoder(90);
+            // Reuse meta segments (EXIF) from original file if available
+            const metaSegs = this.state.meta ? this.state.meta.detectedMetaSegments : null;
+
+            const jpegBytes = encoder.save(this.state.decoded, metaSegs);
+            const blob = new Blob([jpegBytes], {type: 'image/jpeg'});
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'edited_image.jpg';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    };
+
+    App.init();
+    </script>
+</body>
+</html>
