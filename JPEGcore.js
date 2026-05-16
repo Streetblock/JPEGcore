@@ -292,11 +292,12 @@ const JpegCORE = {
             const d = new Uint8Array(buf);
             const M = JpegCORE.Constants.MARKERS, ZZ = JpegCORE.Constants.ZIG_ZAG, SM = JpegCORE.Constants.SAMPLE_MODES;
             let pos = 2, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [], tables = { 0: {}, 1: {} };
+            const quantTables = {}; // Store extracted DQTs
             const mh = (L, V) => { let t = {}, c = 0, p = 0; for (let i = 1; i <= 16; i++) { for (let j = 0; j < L[i - 1]; j++) { let k = ""; for (let x = i - 1; x >= 0; x--)k += (c >> x) & 1; t[k] = V[p++]; c++; } c <<= 1; } return t; };
 
             if (d[0] !== 0xFF || d[1] !== M.SOI) throw new Error("Not a JPEG");
 
-            // 1. Initial Scan for Headers (Size, Frame Type, Huffman Tables)
+            // 1. Initial Scan for Headers (Size, Frame Type, Huffman Tables, Quant Tables)
             while (pos < d.length - 1) {
                 if (d[pos] !== 0xFF) { pos++; continue; }
                 while (d[pos] === 0xFF && pos < d.length) pos++;
@@ -310,11 +311,32 @@ const JpegCORE = {
                 if (marker === M.SOF0 || marker === M.SOF2) {
                     h = (d[pos + 4] << 8) | d[pos + 5]; w = (d[pos + 6] << 8) | d[pos + 7];
                     const numComps = d[pos + 8]; compMapList = [];
-                    for (let i = 0; i < numComps; i++) compMapList.push({ id: d[pos + 10 + (i * 3)], type: (i === 0) ? 0 : (i === 1 ? 1 : 2), samp: d[pos + 11 + (i * 3)] });
+                    for (let i = 0; i < numComps; i++) {
+                         compMapList.push({
+                            id: d[pos + 10 + (i * 3)],
+                            type: (i === 0) ? 0 : (i === 1 ? 1 : 2),
+                            samp: d[pos + 11 + (i * 3)],
+                            tq: d[pos + 12 + (i * 3)] // Capture Quant Table Selector
+                         });
+                    }
                     if (numComps === 1) { finalMode = 'GRAY'; mcuStructure = SM['GRAY']; }
                     else { const ySamp = compMapList[0].samp; mcuStructure = (ySamp === 0x22 ? SM['420'] : (ySamp === 0x21 ? SM['422'] : (ySamp === 0x11 ? SM['444'] : SM['420']))); finalMode = (ySamp === 0x22 ? '420' : (ySamp === 0x21 ? '422' : (ySamp === 0x11 ? '444' : '420'))); }
                 } else if (marker === M.DHT) {
                     let subPos = pos + 3; while (subPos < end) { const info = d[subPos++], tc = (info >> 4) & 0x0F, th = info & 0x0F, nr = Array.from(d.slice(subPos, subPos + 16)); subPos += 16; let count = 0; for (let c of nr) count += c; const val = Array.from(d.slice(subPos, subPos + count)); subPos += count; if (!tables[tc]) tables[tc] = {}; tables[tc][th] = mh(nr, val); }
+                } else if (marker === M.DQT) {
+                    let subPos = pos + 3;
+                    while (subPos < end) {
+                        const info = d[subPos++];
+                        const id = info & 0x0F;
+                        // Precision (d[subPos]>>4) usually 0 for 8-bit. We assume 8-bit.
+                        // Read 64 bytes. IMPORTANT: Convert from ZIGZAG to NATURAL order here.
+                        // IDCT expects Natural order. Files store ZigZag.
+                        const naturalTbl = new Uint8Array(64);
+                        for (let z = 0; z < 64; z++) {
+                           naturalTbl[ZZ[z]] = d[subPos++];
+                        }
+                        quantTables[id] = naturalTbl;
+                    }
                 }
                 pos = end;
             }
@@ -333,6 +355,8 @@ const JpegCORE = {
             const rh = (m) => { let k = ""; while (k.length < 16) { let b = nb(); if (b === 'RST' || b === 'MARKER') return b; if (b === null) return null; k += b; if (m[k] !== undefined) return m[k]; } return null; };
             const rv = (l) => { let v = 0; for (let i = 0; i < l; i++) { let b = nb(); if (b === null || typeof b === 'string') return null; v = (v << 1) | b; } return v < (1 << (l - 1)) ? v + (-1 << l) + 1 : v; };
 
+            let scanCount = 0;
+
             // 4. Multi-Scan Loop (For Progressive JPEG)
             // 'pos' is currently at the first SOS marker (0xFF, 0xDA)
             while (pos < d.length - 1) {
@@ -342,10 +366,14 @@ const JpegCORE = {
                 const marker = d[pos];
 
                 if (marker === M.SOS) {
+                    scanCount++; // Increment count of processed scans
                     const len = (d[pos + 1] << 8) | d[pos + 2], sosEnd = pos + 1 + len;
                     const ns = d[pos + 4], comps = [];
                     for (let i = 0; i < ns; i++) { const cs = d[pos + 5 + i * 2], mapObj = compMapList.find(x => x.id === cs); if (mapObj) comps.push({ type: mapObj.type, dcTbl: (d[pos + 6 + i * 2] >> 4) & 0xF, acTbl: d[pos + 6 + i * 2] & 0xF }); }
                     const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1], Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
+
+                    // LOGGING THE SCAN DETAILS
+                    console.log(`[JpegCORE] Processing Scan #${scanCount} (Ss:${Ss}, Se:${Se}, Ah:${Ah}, Al:${Al})`);
 
                     // Sync bit reader to start of entropy segment
                     bp = sosEnd; bb = 0; bc = 0;
@@ -422,25 +450,6 @@ const JpegCORE = {
                                                     if (Ah > 0) {
                                                         // Refine rest of this block
                                                         for(; k<=Se; k++) {
-                                                            const idx = blockOffset + ZZ[k];
-                                                            if (coeffBuffer[idx] !== 0) {
-                                                                let bit = nb();
-                                                                if (bit === 1) {
-                                                                    if (coeffBuffer[idx] > 0) coeffBuffer[idx] += (1 << Al);
-                                                                    else coeffBuffer[idx] -= (1 << Al);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    break; // End of block
-                                                } else {
-                                                    // ZRL: Skip 16 zeroes
-                                                    if (Ah === 0) {
-                                                        k += 15; // Simple skip
-                                                    } else {
-                                                        // Refine while skipping
-                                                        let z = 0;
-                                                        while (z < 16 && k <= Se) {
                                                             const idx = blockOffset + ZZ[k];
                                                             if (coeffBuffer[idx] !== 0) {
                                                                 let bit = nb();
@@ -528,7 +537,8 @@ const JpegCORE = {
                 const off = i * 64, bTypeIndex = i % blocksPerMCU, bDef = mcuStructure.blocks[bTypeIndex], isChroma = bDef.t === 'C';
                 allBlocks.push({ data: coeffBuffer.slice(off, off + 64), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
             }
-            return { blocks: allBlocks, w, h, mode: finalMode };
+            // Pass parsed DQTs and Component Mapping to the result for Renderer
+            return { blocks: allBlocks, w, h, mode: finalMode, quantTables: quantTables, compMap: compMapList };
         },
 
         render: function(decoded, scale = 1.0) {
@@ -548,8 +558,37 @@ const JpegCORE = {
             const finalData = new Uint8ClampedArray(w * h * 4);
             const idctEngine = new JpegCORE.Decoder.IDCT();
             const SM = JpegCORE.Constants.SAMPLE_MODES[mode];
-            const Q_L = JpegCORE.Constants.QUANT_L;
-            const Q_C = JpegCORE.Constants.QUANT_C;
+            const ZZ = JpegCORE.Constants.ZIG_ZAG;
+
+            // Prepare Quant Tables (Default or Extracted)
+            // IMPORTANT: If falling back to Constants, we MUST convert ZigZag -> Natural
+            // because IDCT engine expects Natural order.
+            const ensureNatural = (zzTbl) => {
+                const n = new Uint8Array(64);
+                for(let i=0; i<64; i++) n[ZZ[i]] = zzTbl[i];
+                return n;
+            };
+
+            const defaultQ = {
+                0: ensureNatural(JpegCORE.Constants.QUANT_L),
+                1: ensureNatural(JpegCORE.Constants.QUANT_C)
+            };
+
+            // Map component (0=Y, 1=Cb, 2=Cr) to a Quant Table
+            const compToQT = {};
+            if (decoded.compMap && decoded.quantTables) {
+                // Use actual tables from file
+                decoded.compMap.forEach((c, idx) => {
+                    // c.type is 0(Y), 1(Cb), 2(Cr). c.tq is the table ID (0..3)
+                    const tbl = decoded.quantTables[c.tq];
+                    compToQT[c.type] = tbl || defaultQ[c.type === 0 ? 0 : 1];
+                });
+            } else {
+                // Fallback
+                compToQT[0] = defaultQ[0];
+                compToQT[1] = defaultQ[1];
+                compToQT[2] = defaultQ[1];
+            }
 
             // Calculate MCU dimensions based on Scaled Block Size
             const mcuW = SM.hMax * blockSize;
@@ -569,7 +608,8 @@ const JpegCORE = {
                     for (let b = 0; b < blocksPerMCU; b++) {
                         if (bIdx >= blocks.length) break;
                         const rawBlock = blocks[bIdx++];
-                        const qTable = (rawBlock.type === 'C') ? Q_C : Q_L;
+                        // rawBlock.comp is 0 (Y), 1 (Cb), or 2 (Cr)
+                        const qTable = compToQT[rawBlock.comp];
                         spatialBlocks.push({
                             // Pass blockSize to IDCT to perform scaled transform
                             pixels: idctEngine.transform(rawBlock.data, qTable, blockSize),
