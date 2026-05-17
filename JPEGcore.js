@@ -1584,9 +1584,22 @@ const JpegCORE = {
 
         dct(b, q) {
             const r = new Int32Array(64);
-            for (let u = 0; u < 8; u++) for (let v = 0; v < 8; v++) {
-                let s = 0; for (let x = 0; x < 8; x++) for (let y = 0; y < 8; y++) s += b[x * 8 + y] * this.COS[u][x] * this.COS[v][y];
-                r[u * 8 + v] = Math.round((0.25 * (u === 0 ? 0.70710678 : 1) * (v === 0 ? 0.70710678 : 1) * s) / q[u * 8 + v]);
+            const COS = this.COS;
+            for (let u = 0; u < 8; u++) {
+                const cu = COS[u];
+                const uScale = 0.25 * (u === 0 ? 0.70710678 : 1);
+                const outBase = u * 8;
+                for (let v = 0; v < 8; v++) {
+                    const cv = COS[v];
+                    let s = 0;
+                    for (let x = 0; x < 8; x++) {
+                        const rowBase = x * 8;
+                        const ux = cu[x];
+                        for (let y = 0; y < 8; y++) s += b[rowBase + y] * ux * cv[y];
+                    }
+                    const out = outBase + v;
+                    r[out] = Math.round((uScale * (v === 0 ? 0.70710678 : 1) * s) / q[out]);
+                }
             }
             return r;
         }
