@@ -1,4 +1,4 @@
-/**
+﻿/**
 * JpegCORE - A pure JavaScript JPEG Encoder/Decoder/Transformer Library
 * Extended Version 1.9.0 Refactor with Utils
 * * CORES:
@@ -12,6 +12,9 @@
 */
 
 const JpegCORE = {
+    Config: {
+        nativeProgressiveDecode: true
+    },
     // --- 1. CONSTANTS ---
     Constants: {
       MARKERS: {
@@ -46,7 +49,7 @@ const JpegCORE = {
     Utils: {
 
         // --- 1. HUFFMAN TREE GENERATOR ---
-        // Konvertiert die JPEG-Standard-Tabellenform in einen navigierbaren binären Baum.
+        // Konvertiert die JPEG-Standard-Tabellenform in einen navigierbaren binÃ¤ren Baum.
         makeHuffmanTree: function(L, V) {
             const root = [];
             let c = 0, p = 0;
@@ -72,20 +75,20 @@ const JpegCORE = {
         // --- 2. BIT READER KLASSE ---
         /**
          * BitReader - Spezialisierte Klasse zum bitweisen Lesen des JPEG-Datenstroms.
-         * * Diese Klasse ist entscheidend für die Vermeidung des "Grau-Bild-Bugs".
-         * Er entsteht, wenn der Decoder über Marker (wie 0xFF 0xD9) hinausliest
-         * und Müll-Daten als Bildinformationen interpretiert.
+         * * Diese Klasse ist entscheidend fÃ¼r die Vermeidung des "Grau-Bild-Bugs".
+         * Er entsteht, wenn der Decoder Ã¼ber Marker (wie 0xFF 0xD9) hinausliest
+         * und MÃ¼ll-Daten als Bildinformationen interpretiert.
          */
         BitReader: class {
             constructor(data, startPos= 0) {
                 this.d = data;           // Das Uint8Array des gesamten JPEG-Files
                 this._pos = startPos;     // Aktuelle Byte-Position im Array
-                this.bitBuffer = 0;      // Zwischenspeicher für das aktuelle Byte
-                this.bitCount = 0;       // Anzahl der noch verfügbaren Bits im Buffer
+                this.bitBuffer = 0;      // Zwischenspeicher fÃ¼r das aktuelle Byte
+                this.bitCount = 0;       // Anzahl der noch verfÃ¼gbaren Bits im Buffer
 
                 // Status-Codes zur Signalisierung von Stream-Ereignissen
                 this.STAT_MARKER = -1;   // Ein unerwarteter Marker unterbricht den Datenstrom
-                this.STAT_RST = -2;      // Ein Restart-Marker wurde gefunden (für Fehlerkorrektur)
+                this.STAT_RST = -2;      // Ein Restart-Marker wurde gefunden (fÃ¼r Fehlerkorrektur)
             }
 
             // Getter: Liefert die aktuelle Byte-Position
@@ -97,11 +100,11 @@ const JpegCORE = {
             set pos(newPos) {
                 this._pos = newPos;
                 this.bitBuffer = 0; // WICHTIG: Puffer leeren
-                this.bitCount = 0;  // WICHTIG: Bit-Zähler zurücksetzen
+                this.bitCount = 0;  // WICHTIG: Bit-ZÃ¤hler zurÃ¼cksetzen
             }
 
             /**
-             * Holt das nächste Bit. Behandelt das JPEG "Byte-Stuffing".
+             * Holt das nÃ¤chste Bit. Behandelt das JPEG "Byte-Stuffing".
              * JPEG wandelt 0xFF in den Bilddaten zu 0xFF 0x00 um, damit es nicht mit Markern verwechselt wird.
              */
             nextBit() {
@@ -112,12 +115,17 @@ const JpegCORE = {
 
                     // JPEG-Marker-Logik: 0xFF leitet immer etwas Besonderes ein
                     if (b === 0xFF) {
+                        // Optional fill bytes (0xFF) may precede a marker at scan boundaries.
+                        // Consume them so marker handling remains aligned.
+                        while (this._pos < this.d.length && this.d[this._pos] === 0xFF) {
+                            this._pos++;
+                        }
                         if (this._pos >= this.d.length) return null;
                         let next = this.d[this._pos];
 
                         if (next === 0) {
                             // 0xFF 0x00: Ein echtes 0xFF-Datenbyte, das "gestopft" wurde.
-                            this._pos++; // Überspringe die 0x00
+                            this._pos++; // Ãœberspringe die 0x00
                         } else if (next >= 0xD0 && next <= 0xD7) {
                             // Restart-Marker (RST0-RST7): Erlaubt Dekodier-Resets.
                             this._pos++;
@@ -134,14 +142,14 @@ const JpegCORE = {
                     this.bitCount = 8;
                 }
 
-                // Extrahiere das höchstwertige Bit (MSB) und schiebe den Puffer weiter
+                // Extrahiere das hÃ¶chstwertige Bit (MSB) und schiebe den Puffer weiter
                 const bit = (this.bitBuffer >> (this.bitCount - 1)) & 1;
                 this.bitCount--;
                 return bit;
             }
 
             /**
-             * Liest eine Sequenz von Bits und gibt sie als Ganzzahl zurück.
+             * Liest eine Sequenz von Bits und gibt sie als Ganzzahl zurÃ¼ck.
              * WICHTIG: Reicht Status-Codes (-1, -2) sofort nach oben durch.
              */
             readRaw(length) {
@@ -176,17 +184,17 @@ const JpegCORE = {
 
             /**
              * Navigiert durch den Huffman-Baum basierend auf dem Bitstream.
-             * Jetzt mit Sicherheits-Stopp bei korrupten Bäumen.
+             * Jetzt mit Sicherheits-Stopp bei korrupten BÃ¤umen.
              */
             readHuffman(node) {
                 let curr = node;
                 let safety = 0;
 
-                while (safety < 32) { // Sicherheitslimit hinzugefügt
+                while (safety < 32) { // Sicherheitslimit hinzugefÃ¼gt
                     safety++;
                     const b = this.nextBit();
 
-                    // Status-Codes (-1, -2) oder Stream-Ende (null) sofort zurückgeben
+                    // Status-Codes (-1, -2) oder Stream-Ende (null) sofort zurÃ¼ckgeben
                     if (b === null || b < 0) return b;
 
                     curr = curr[b];
@@ -195,7 +203,7 @@ const JpegCORE = {
                     if (curr === undefined) return null; // Pfad im Baum existiert nicht
                 }
 
-                return null; // Sicherheits-Stopp: Code zu lang oder Baum zirkulär
+                return null; // Sicherheits-Stopp: Code zu lang oder Baum zirkulÃ¤r
             }
 
             /**
@@ -594,16 +602,16 @@ const JpegCORE = {
 
                 // --- Robust Bit Reader Instanz ---
                 // Wir erstellen den Reader. Er bekommt das Daten-Array 'd'.
-                // WICHTIG: Wir übergeben 'pos' erst dann, wenn der eigentliche Scan beginnt,
-                // oder wir initialisieren ihn hier mit 0 und setzen die Position später.
+                // WICHTIG: Wir Ã¼bergeben 'pos' erst dann, wenn der eigentliche Scan beginnt,
+                // oder wir initialisieren ihn hier mit 0 und setzen die Position spÃ¤ter.
                 const reader = new JpegCORE.Utils.BitReader(d, 0);
 
 
                 // Wir binden 'nb' einfach an die Methode der Klasse.
-                // So muss der restliche Code (rh, rv, readRawBits) noch nicht geändert werden.
+                // So muss der restliche Code (rh, rv, readRawBits) noch nicht geÃ¤ndert werden.
                 const nb = () => reader.nextBit();
 
-                // Die Hilfsfunktionen nutzen nun intern den 'reader' über 'nb'
+                // Die Hilfsfunktionen nutzen nun intern den 'reader' Ã¼ber 'nb'
                 const readRawBits = (l) => reader.readRaw(l);
                 const rh = (node) => reader.readHuffman(node);
                 const rv = (l) => reader.readSigned(l);//*/
@@ -688,6 +696,7 @@ const JpegCORE = {
                 // --- Parser Header ---
                 if (d.length < 2) throw new Error("File too short");
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
+                let isProgressive = false;
                 let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
 
@@ -707,6 +716,7 @@ const JpegCORE = {
                     if (segmentEnd > d.length) break;
 
                     if (marker === M.SOF0 || marker === M.SOF2) {
+                        isProgressive = (marker === M.SOF2);
                         h = (d[pos + 4] << 8) | d[pos + 5];
                         w = (d[pos + 6] << 8) | d[pos + 7];
                         const numComps = d[pos + 8];
@@ -754,8 +764,42 @@ const JpegCORE = {
 
                 if (!w || !h || !mcuStructure) return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
                 if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
-                    throw new Error(`Bildmaße zu groß: ${w}x${h}`);
+                    throw new Error(`BildmaÃŸe zu groÃŸ: ${w}x${h}`);
                 }
+
+                // Progressive fallback:
+                // Prefer native browser decoding path (no external dependency).
+                if (isProgressive && JpegCORE.Config.nativeProgressiveDecode) {
+                    const hasCreateImageBitmap = (typeof createImageBitmap === 'function');
+                    const hasOffscreenCanvas = (typeof OffscreenCanvas !== 'undefined');
+                    const hasDomCanvas = (typeof document !== 'undefined' && typeof document.createElement === 'function');
+                    if (hasCreateImageBitmap && (hasOffscreenCanvas || hasDomCanvas)) {
+                        try {
+                            const bitmap = await createImageBitmap(file);
+                            const canvas = hasOffscreenCanvas ? new OffscreenCanvas(bitmap.width, bitmap.height) : document.createElement('canvas');
+                            if (!hasOffscreenCanvas) { canvas.width = bitmap.width; canvas.height = bitmap.height; }
+                            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                            if (ctx) {
+                                ctx.drawImage(bitmap, 0, 0);
+                                const img = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+                                if (typeof bitmap.close === 'function') bitmap.close();
+                                return {
+                                    preDecodedData: img.data,
+                                    w: bitmap.width,
+                                    h: bitmap.height,
+                                    mode: 'RGBA_NATIVE',
+                                    quantTables: {},
+                                    compMap: [],
+                                    isProgressiveFallback: true,
+                                    decodeBackend: 'native'
+                                };
+                            }
+                        } catch (nativeDecodeErr) {
+                            // Continue with other fallback options.
+                        }
+                    }
+                }
+
                 // --- Setup Buffer ---
                 const blocksPerMCU = mcuStructure.blocks.length;
                 const cols = Math.ceil(w / (mcuStructure.hMax * 8));
@@ -775,6 +819,8 @@ const JpegCORE = {
                 bp = pos; bb = 0; bc = 0;
                 if (pos < d.length && d[pos] !== 0xFF && d[pos-1] === 0xFF) pos--;
                 let predDC = [0, 0, 0];
+                const compBlockOrderCache = {};
+                const compBlockOffsetsCache = {};
 
                 // --- Scan Loop ---
                 try {
@@ -795,12 +841,25 @@ const JpegCORE = {
                                 const cs = d[pos + 4 + i * 2];
                                 const tdta = d[pos + 5 + i * 2];
                                 const mapObj = compMapList.find(x => x.id === cs);
-                                if (mapObj) comps.push({ type: mapObj.type, dcTbl: (tdta >> 4) & 0xF, acTbl: tdta & 0xF });
+                                if (mapObj) {
+                                    const dcTbl = (tdta >> 4) & 0xF;
+                                    const acTbl = tdta & 0xF;
+                                    comps.push({
+                                        type: mapObj.type,
+                                        dcTbl,
+                                        acTbl,
+                                        dcNode: (tables[0][dcTbl]) ? tables[0][dcTbl] : tables[0][0],
+                                        acNode: (tables[1][acTbl]) ? tables[1][acTbl] : tables[1][0]
+                                    });
+                                }
                             }
                             if (comps.length === 0) comps.push({type:0, dcTbl:0, acTbl:0});
 
                             const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
                             const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
+                            const kStart = (Ss > 1) ? Ss : 1;
+                            const coeff = coeffBuffer;
+                            const zig = ZZ;
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
                             reader.pos= sosEnd;
@@ -817,134 +876,231 @@ const JpegCORE = {
                                 if (!typeToIndices[t]) typeToIndices[t] = [];
                                 typeToIndices[t].push(b);
                             }
+                            // For non-interleaved scans (Ns=1), JPEG requires component blocks
+                            // in left-to-right/top-to-bottom component raster order.
+                            const buildCompBlockOrder = (compType) => {
+                                if (compBlockOrderCache[compType]) return compBlockOrderCache[compType];
+                                const blkIndices = typeToIndices[compType] || [];
+                                if (blkIndices.length === 0) { compBlockOrderCache[compType] = []; return compBlockOrderCache[compType]; }
+
+                                let hComp = 0, vComp = 0;
+                                const subToBIdx = [];
+                                for (const bIdx of blkIndices) {
+                                    const def = mcuStructure.blocks[bIdx];
+                                    if (def.dx + 1 > hComp) hComp = def.dx + 1;
+                                    if (def.dy + 1 > vComp) vComp = def.dy + 1;
+                                    subToBIdx[(def.dy * 8) + def.dx] = bIdx;
+                                }
+
+                                const ordered = [];
+                                // For non-interleaved scans, decode only the component's real block raster
+                                // (not the padded MCU grid for other components).
+                                const compCols = Math.ceil((w * hComp) / (mcuStructure.hMax * 8));
+                                const compRows = Math.ceil((h * vComp) / (mcuStructure.vMax * 8));
+                                for (let by = 0; by < compRows; by++) {
+                                    const mcuY = (by / vComp) | 0;
+                                    const subY = by % vComp;
+                                    for (let bx = 0; bx < compCols; bx++) {
+                                        const mcuX = (bx / hComp) | 0;
+                                        const subX = bx % hComp;
+                                        const bIdx = subToBIdx[(subY * 8) + subX];
+                                        if (bIdx === undefined) continue;
+                                        const m = mcuY * cols + mcuX;
+                                        ordered.push(m * blocksPerMCU + bIdx);
+                                    }
+                                }
+                                compBlockOrderCache[compType] = ordered;
+                                const offsets = new Int32Array(ordered.length);
+                                for (let i = 0; i < ordered.length; i++) offsets[i] = ordered[i] * 64;
+                                compBlockOffsetsCache[compType] = offsets;
+                                return ordered;
+                            };
 
                             let markerFound = false;
 
-                            // --- Haupt-MCU Loop ---
-                            for (let m = 0; m < cols * rows; m++) {
-                                for (let c of comps) {
-                                    const blkIndices = typeToIndices[c.type];
-                                    if (!blkIndices) continue;
-
-                                    for (let bIdx of blkIndices) {
-                                        const blockOffset = (m * blocksPerMCU + bIdx) * 64;
-                                        if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
-
-                                        // --- DC SCAN ---
-                                        if (Ss === 0) {
-                                            const tbl = (tables[0][c.dcTbl]) ? tables[0][c.dcTbl] : tables[0][0];
-                                            if (Ah === 0) {
-                                                let s = rh(tbl);
-                                                if (s === STAT_RST) { predDC = [0,0,0]; s = rh(tbl); }
-                                                if (s === STAT_MARKER || s === null) { markerFound = true; break; }
-                                                let diff = (s === 0) ? 0 : rv(s);
-                                                if (diff === null) { markerFound = true; break; }
-                                                predDC[c.type] += diff;
-                                                coeffBuffer[blockOffset] = predDC[c.type] << Al;
-                                            } else {
-                                                let bit = nb();
-                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; break; }
-                                                if (bit === 1) coeffBuffer[blockOffset] |= (1 << Al);
-                                            }
+                            const decodeDCFirst = (blockOffset, c) => {
+                                let s = rh(c.dcNode);
+                                if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(c.dcNode); }
+                                if (s === STAT_MARKER || s === null) { markerFound = true; return; }
+                                let diff = (s === 0) ? 0 : rv(s);
+                                if (diff === null) { markerFound = true; return; }
+                                predDC[c.type] += diff;
+                                coeff[blockOffset] = predDC[c.type] << Al;
+                            };
+                            const decodeDCSuccessive = (blockOffset) => {
+                                let bit = nb();
+                                if (bit === STAT_MARKER || bit === null) { markerFound = true; return; }
+                                if (bit === 1) coeff[blockOffset] |= (1 << Al);
+                            };
+                            const decodeACFirst = (blockOffset, c) => {
+                                if (eob_run > 0) { eob_run--; return; }
+                                let k = kStart;
+                                while (k <= Se) {
+                                    let rs = rh(c.acNode);
+                                    if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
+                                    const r = rs >> 4, s = rs & 15;
+                                    if (s === 0) {
+                                        if (r < 15) {
+                                            let extra = readRawBits(r);
+                                            if (extra === STAT_MARKER || extra === STAT_RST || extra === null) { markerFound = true; break; }
+                                            eob_run = (1 << r) + extra - 1;
+                                            break;
                                         }
-
-                                        // --- AC SCAN ---
-                                        if (Se > 0) {
-                                            const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
-                                            const p1 = 1 << Al, m1 = (-1) << Al;
-
-                                            if (Ah === 0) {
-                                                // --- AC FIRST SCAN ---
-                                                if (eob_run > 0) {
-                                                    eob_run--;
+                                        k += 15;
+                                    } else {
+                                        k += r;
+                                        let val = rv(s);
+                                        if (val === null) { markerFound = true; break; }
+                                        if (k <= Se) coeff[blockOffset + zig[k]] = val << Al;
+                                    }
+                                    k++;
+                                }
+                            };
+                            const decodeACSuccessive = (blockOffset, c) => {
+                                const p1 = 1 << Al, m1 = (-1) << Al;
+                                let k = kStart;
+                                while (k <= Se) {
+                                    const idx = blockOffset + zig[k];
+                                    const direction = coeff[idx] < 0 ? -1 : 1;
+                                    switch (successiveACState) {
+                                        case 0: {
+                                            let rs = rh(c.acNode);
+                                            if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
+                                            const s = rs & 15;
+                                            acRun = rs >> 4;
+                                            if (s === 0) {
+                                                if (acRun < 15) {
+                                                    let extra = readRawBits(acRun);
+                                                    if (extra === STAT_MARKER || extra === STAT_RST || extra === null) { markerFound = true; break; }
+                                                    eob_run = (1 << acRun) + extra;
+                                                    successiveACState = 4;
                                                 } else {
-                                                    let k = Math.max(Ss, 1);
-                                                    while (k <= Se) {
-                                                        let rs = rh(tbl);
-                                                        if (rs === STAT_MARKER || rs === null) { markerFound = true; break; }
-                                                        const r = rs >> 4, s = rs & 15;
-                                                        if (s === 0) {
-                                                            if (r < 15) {
-                                                                let extra = readRawBits(r);
-                                                                eob_run = (1 << r) + extra - 1;
-                                                                break;
-                                                            } else { k += 15; }
-                                                        } else {
-                                                            k += r;
-                                                            let val = rv(s);
-                                                            if (k <= Se) coeffBuffer[blockOffset + ZZ[k]] = val << Al;
-                                                        }
-                                                        k++;
-                                                    }
+                                                    acRun = 16;
+                                                    successiveACState = 1;
                                                 }
                                             } else {
-                                                // --- AC SUCCESSIVE (Verfeinerung) ---
-                                                let k = Math.max(Ss, 1);
-                                                if (eob_run > 0) {
-                                                    // Während eines EOB-Runs werden nur existierende Werte verfeinert
-                                                    while (k <= Se) {
-                                                        const idx = blockOffset + ZZ[k];
-                                                        if (coeffBuffer[idx] !== 0) {
-                                                            if (nb() === 1) coeffBuffer[idx] += (coeffBuffer[idx] > 0) ? p1 : m1;
-                                                        }
-                                                        k++;
-                                                    }
-                                                    eob_run--;
-                                                } else {
-                                                    while (k <= Se) {
-                                                        let rs = rh(tbl);
-                                                        if (rs === STAT_MARKER || rs === null) { markerFound = true; break; }
-                                                        const r = rs >> 4, s = rs & 15;
-                                                        let zerosToSkip = r;
-
-                                                        if (s === 0) {
-                                                            if (r < 15) {
-                                                                let extra = readRawBits(r);
-                                                                eob_run = (1 << r) + extra;
-                                                                // Verfeinere restliche Koeffizienten im aktuellen Block
-                                                                while (k <= Se) {
-                                                                    const idx = blockOffset + ZZ[k];
-                                                                    if (coeffBuffer[idx] !== 0) {
-                                                                        if (nb() === 1) coeffBuffer[idx] += (coeffBuffer[idx] > 0) ? p1 : m1;
-                                                                    }
-                                                                    k++;
-                                                                }
-                                                                eob_run--; // Dieser Block ist fertig
-                                                                break;
-                                                            } else { zerosToSkip = 15; }
-                                                        }
-
-                                                        // Run/Value Logik: Verfeinere Non-Zeros, springe über r Nullen
-                                                        while (k <= Se) {
-                                                            const idx = blockOffset + ZZ[k];
-                                                            if (coeffBuffer[idx] !== 0) {
-                                                                if (nb() === 1) coeffBuffer[idx] += (coeffBuffer[idx] > 0) ? p1 : m1;
-                                                            } else {
-                                                                if (zerosToSkip === 0) {
-                                                                    if (s !== 0) {
-                                                                        let bit = nb();
-                                                                        coeffBuffer[idx] = (bit === 1) ? p1 : m1;
-                                                                    }
-                                                                    break;
-                                                                }
-                                                                zerosToSkip--;
-                                                            }
-                                                            k++;
-                                                        }
-                                                        k++;
-                                                    }
-                                                }
+                                                if (s !== 1) { markerFound = true; break; }
+                                                let nextValue = rv(s);
+                                                if (nextValue === null) { markerFound = true; break; }
+                                                successiveACNextValue = nextValue;
+                                                successiveACState = acRun ? 2 : 3;
                                             }
+                                            continue;
+                                        }
+                                        case 1:
+                                        case 2: {
+                                            if (coeff[idx] !== 0) {
+                                                let bit = nb();
+                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
+                                                if (bit === 1) coeff[idx] += (direction > 0) ? p1 : m1;
+                                            } else {
+                                                acRun--;
+                                                if (acRun === 0) successiveACState = (successiveACState === 2) ? 3 : 0;
+                                            }
+                                            break;
+                                        }
+                                        case 3: {
+                                            if (coeff[idx] !== 0) {
+                                                let bit = nb();
+                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
+                                                if (bit === 1) coeff[idx] += (direction > 0) ? p1 : m1;
+                                            } else {
+                                                coeff[idx] = successiveACNextValue << Al;
+                                                successiveACState = 0;
+                                            }
+                                            break;
+                                        }
+                                        case 4: {
+                                            if (coeff[idx] !== 0) {
+                                                let bit = nb();
+                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
+                                                if (bit === 1) coeff[idx] += (direction > 0) ? p1 : m1;
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    if (markerFound) break;
+                                    k++;
+                                }
+                                if (!markerFound && successiveACState === 4) {
+                                    eob_run--;
+                                    if (eob_run === 0) successiveACState = 0;
+                                }
+                            };
+                            const decodeBaselineSequential = (blockOffset, c) => {
+                                let s = rh(c.dcNode);
+                                if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(c.dcNode); }
+                                if (s === STAT_MARKER || s === null) { markerFound = true; return; }
+                                let diff = (s === 0) ? 0 : rv(s);
+                                if (diff === null) { markerFound = true; return; }
+                                predDC[c.type] += diff;
+                                coeff[blockOffset] = predDC[c.type];
+
+                                let k = 1;
+                                while (k < 64) {
+                                    let rs = rh(c.acNode);
+                                    if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
+                                    const r = rs >> 4, acs = rs & 15;
+                                    if (acs === 0) {
+                                        if (r < 15) break;
+                                        k += 16;
+                                        continue;
+                                    }
+                                    k += r;
+                                    let val = rv(acs);
+                                    if (val === null) { markerFound = true; break; }
+                                    if (k < 64) coeff[blockOffset + zig[k]] = val;
+                                    k++;
+                                }
+                            };
+
+                            let decodeBlockFn;
+                            if (Ss === 0 && Se === 63 && Ah === 0) {
+                                decodeBlockFn = (blockOffset, c) => decodeBaselineSequential(blockOffset, c);
+                            } else if (Ss === 0) {
+                                decodeBlockFn = (Ah === 0)
+                                    ? (blockOffset, c) => decodeDCFirst(blockOffset, c)
+                                    : (blockOffset) => decodeDCSuccessive(blockOffset);
+                            } else if (Ah === 0) {
+                                decodeBlockFn = (blockOffset, c) => decodeACFirst(blockOffset, c);
+                            } else {
+                                decodeBlockFn = (blockOffset, c) => decodeACSuccessive(blockOffset, c);
+                            }
+
+                            if (ns === 1 && comps.length === 1) {
+                                const c = comps[0];
+                                if (!compBlockOffsetsCache[c.type]) buildCompBlockOrder(c.type);
+                                const orderedOffsets = compBlockOffsetsCache[c.type] || new Int32Array(0);
+                                for (let i = 0; i < orderedOffsets.length; i++) {
+                                    const blockOffset = orderedOffsets[i];
+                                    if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
+                                    decodeBlockFn(blockOffset, c);
+                                    if (markerFound) break;
+                                }
+                            } else {
+                                for (let m = 0; m < cols * rows; m++) {
+                                    for (let c of comps) {
+                                        const blkIndices = typeToIndices[c.type];
+                                        if (!blkIndices) continue;
+                                        for (let bIdx of blkIndices) {
+                                            const blockOffset = (m * blocksPerMCU + bIdx) * 64;
+                                            if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
+                                            decodeBlockFn(blockOffset, c);
+                                            if (markerFound) break;
                                         }
                                         if (markerFound) break;
                                     }
                                     if (markerFound) break;
                                 }
-                                if (markerFound) break;
                             }
 
-                            // FIX: Synchronisiere die Stream-Position für den nächsten Scan
+                            // FIX: Synchronisiere die Stream-Position fÃ¼r den nÃ¤chsten Scan.
+                            // BitReader stoppt bei 0xFF + MarkerByte und lÃ¤sst pos auf MarkerByte.
+                            // Der Segment-Parser unten erwartet dagegen, dass pos auf 0xFF zeigt.
                             pos = reader.pos;
+                            if (pos > 0 && pos < d.length && d[pos] !== 0xFF && d[pos - 1] === 0xFF) {
+                                pos--;
+                            }
 
                         } else if (marker === M.DHT) {
                             const len = (d[pos + 1] << 8) | d[pos + 2];
@@ -965,7 +1121,7 @@ const JpegCORE = {
                     }
                 } catch (e) { console.warn("Robust Decode Warning:", e); }
 
-                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList };
+                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, decodeBackend: 'internal' };
 
             } catch (globalErr) {
                 console.error("Critical Decoder Failure:", globalErr);
@@ -973,7 +1129,7 @@ const JpegCORE = {
             }
         },//*/
 
-        // Wrapper für Abwärtskompatibilität zu v1.8.0
+        // Wrapper fÃ¼r AbwÃ¤rtskompatibilitÃ¤t zu v1.8.0
         extractBlocks: async function(file) {
             // 1. Die neue, schnelle Funktion aufrufen
             const optimized = await this.extractBlocksStruct(file);
@@ -982,7 +1138,7 @@ const JpegCORE = {
             const legacyBlocks = new Array(optimized.blockList.length);
 
             for (let i = 0; i < optimized.blockList.length; i++) {
-                // Die 64 Koeffizienten für diesen Block ausschneiden
+                // Die 64 Koeffizienten fÃ¼r diesen Block ausschneiden
                 const start = i * 64;
                 const end = start + 64;
                 // .slice() erzeugt eine Kopie, was genau dem Verhalten von 1.8.0 entspricht
@@ -991,7 +1147,7 @@ const JpegCORE = {
                 // Das Metadaten-Objekt holen
                 const meta = optimized.blockList[i];
 
-                // Beides im alten Format zusammenfügen
+                // Beides im alten Format zusammenfÃ¼gen
                 legacyBlocks[i] = {
                     data: blockData,
                     type: meta.type,
@@ -999,7 +1155,7 @@ const JpegCORE = {
                 };
             }
 
-            // 3. Das alte Rückgabe-Objekt zurückgeben
+            // 3. Das alte RÃ¼ckgabe-Objekt zurÃ¼ckgeben
             return {
                 blocks: legacyBlocks,
                 w: optimized.w,
@@ -1014,7 +1170,27 @@ const JpegCORE = {
         render: function(decoded, scale = 1.0) {
             if (!decoded) return new ImageData(1, 1);
 
-            // 1. Daten prüfen
+            if (decoded.preDecodedData && decoded.w && decoded.h) {
+                const srcW = decoded.w, srcH = decoded.h;
+                if (scale === 1.0) return new ImageData(new Uint8ClampedArray(decoded.preDecodedData), srcW, srcH);
+                const w = Math.max(1, Math.ceil(srcW * scale));
+                const h = Math.max(1, Math.ceil(srcH * scale));
+                const out = new Uint8ClampedArray(w * h * 4);
+                for (let y = 0; y < h; y++) {
+                    const sy = Math.min(srcH - 1, Math.floor(y / scale));
+                    for (let x = 0; x < w; x++) {
+                        const sx = Math.min(srcW - 1, Math.floor(x / scale));
+                        const sIdx = (sy * srcW + sx) * 4;
+                        const dIdx = (y * w + x) * 4;
+                        out[dIdx] = decoded.preDecodedData[sIdx];
+                        out[dIdx + 1] = decoded.preDecodedData[sIdx + 1];
+                        out[dIdx + 2] = decoded.preDecodedData[sIdx + 2];
+                        out[dIdx + 3] = decoded.preDecodedData[sIdx + 3];
+                    }
+                }
+                return new ImageData(out, w, h);
+            }
+            // 1. Daten prÃ¼fen
             const blockList = decoded.blockList || decoded.blocks;
             if (!blockList || blockList.length === 0) return new ImageData(1, 1);
 
@@ -1033,7 +1209,7 @@ const JpegCORE = {
             const idct = new JpegCORE.Decoder.IDCT();
 
             // Puffer
-            const mcuPix = new Uint8ClampedArray(64 * 10); // Genug Platz für max 10 Blöcke pro MCU
+            const mcuPix = new Uint8ClampedArray(64 * 10); // Genug Platz fÃ¼r max 10 BlÃ¶cke pro MCU
             const finalData = new Uint8ClampedArray(w * h * 4);
 
             // Quantisierungstabellen Mapping
@@ -1059,7 +1235,7 @@ const JpegCORE = {
                 const rowBase = r * mcuH * w * 4;
 
                 for (let c = 0; c < cols; c++) {
-                    // A. IDCT für diesen MCU Block durchführen
+                    // A. IDCT fÃ¼r diesen MCU Block durchfÃ¼hren
                     for (let b = 0; b < blocksPerMCU; b++) {
                          if (bIdx >= blockList.length) break;
                          const meta = blockList[bIdx];
@@ -1080,7 +1256,7 @@ const JpegCORE = {
                     const maxY = Math.min(mcuH, h - oy);
                     const maxX = Math.min(mcuW, w - ox);
 
-                    // Hier wird entschieden, wie wir die Pixel aus den Blöcken holen
+                    // Hier wird entschieden, wie wir die Pixel aus den BlÃ¶cken holen
                     // basierend auf dem Modus (4:4:4 vs 4:2:2 vs 4:2:0)
 
                     for (let y = 0; y < maxY; y++) {
@@ -1094,7 +1270,7 @@ const JpegCORE = {
                             // --- MODUS LOGIK ---
                             if (mode === '444') {
                                 // 4:4:4 (Kein Subsampling): Y, Cb, Cr sind alle 8x8
-                                // Blöcke: [Y, Cb, Cr]
+                                // BlÃ¶cke: [Y, Cb, Cr]
                                 const pixIdx = y * 8 + x; // Da MCU hier immer 8x8 ist
                                 Y  = mcuPix[pixIdx];      // Block 0
                                 Cb = mcuPix[64 + pixIdx]; // Block 1 (+64)
@@ -1102,7 +1278,7 @@ const JpegCORE = {
 
                             } else if (mode === '422') {
                                 // 4:2:2 (Horizontal Subsampling): MCU 16x8
-                                // Blöcke: [Y0, Y1, Cb, Cr]
+                                // BlÃ¶cke: [Y0, Y1, Cb, Cr]
                                 // Y Logik: Linke 8px -> Block 0, Rechte 8px -> Block 1
                                 const bx = x >> 3; // 0 oder 1
                                 const pixIdxY = y * 8 + (x % 8);
@@ -1116,7 +1292,7 @@ const JpegCORE = {
 
                             } else {
                                 // 4:2:0 (Standard): MCU 16x16
-                                // Blöcke: [Y0, Y1, Y2, Y3, Cb, Cr]
+                                // BlÃ¶cke: [Y0, Y1, Y2, Y3, Cb, Cr]
                                 // Y Logik: 4 Quadranten
                                 const bx = x >> 3; // 0 oder 1
                                 const by = y >> 3; // 0 oder 1
@@ -1518,3 +1694,6 @@ const JpegCORE = {
         wbt(b, l) { for (let i = l - 1; i >= 0; i--) { this.byte = (this.byte << 1) | ((b >> i) & 1); this.cnt++; if (this.cnt === 8) { this.buf.push(this.byte); if (this.byte === 0xFF) this.buf.push(0); this.byte = 0; this.cnt = 0; } } }
     }
 };
+
+
+
