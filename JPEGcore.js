@@ -1580,6 +1580,23 @@ const JpegCORE = {
             this.dctBasisC = this.buildDctBasis(this.dctScaleC);
             this.aanScaleY = this.buildAanScale(this.tY);
             this.aanScaleC = this.buildAanScale(this.tC);
+            this.buildMagnitudeTables();
+        }
+
+        buildMagnitudeTables() {
+            const size = 65535, offset = 32767;
+            this.magOffset = offset;
+            this.magLen = new Uint8Array(size);
+            this.magBits = new Uint16Array(size);
+            for (let l = 1, lo = 1, hi = 2; l <= 15; l++, lo <<= 1, hi <<= 1) {
+                for (let v = lo; v < hi; v++) {
+                    this.magLen[offset + v] = l;
+                    this.magBits[offset + v] = v;
+                    const n = -v;
+                    this.magLen[offset + n] = l;
+                    this.magBits[offset + n] = hi - 1 + n;
+                }
+            }
         }
 
         buildDctScale(q) {
@@ -1829,13 +1846,14 @@ const JpegCORE = {
 
         ems(b, p, hd, ha) {
             const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
-            let d = b[0] - p, a = Math.abs(d), l = 0; while (a > 0) { l++; a >>= 1; }
-            this.wh(hd, l); if (l > 0) { if (d < 0) d -= 1; this.wbt(d & ((1 << l) - 1), l); }
+            const magLen = this.magLen, magBits = this.magBits, magOffset = this.magOffset;
+            let d = b[0] - p, pos = magOffset + d, l = magLen[pos];
+            this.wh(hd, l); if (l > 0) this.wbt(magBits[pos], l);
             let z = 0;
             for (let i = 1; i < 64; i++) {
                 let k = ZZ[i];
                 if (b[k] === 0) z++;
-                else { while (z >= 16) { this.wh(ha, 0xF0); z -= 16; } let v = b[k], av = Math.abs(v), s = 0; while (av > 0) { s++; av >>= 1; } this.wh(ha, (z << 4) | s); if (v < 0) v -= 1; this.wbt(v & ((1 << s) - 1), s); z = 0; }
+                else { while (z >= 16) { this.wh(ha, 0xF0); z -= 16; } let v = b[k], p2 = magOffset + v, s = magLen[p2]; this.wh(ha, (z << 4) | s); this.wbt(magBits[p2], s); z = 0; }
             }
             if (z > 0) this.wh(ha, 0); return b[0];
         }
