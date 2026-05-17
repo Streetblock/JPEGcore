@@ -13,8 +13,6 @@
 
 const JpegCORE = {
     Config: {
-        // Temporary switch for progressive decoding while the native path is improved.
-        progressiveFallback: true,
         nativeProgressiveDecode: true
     },
     // --- 1. CONSTANTS ---
@@ -770,8 +768,7 @@ const JpegCORE = {
                 }
 
                 // Progressive fallback:
-                // 1) Prefer native browser decoding path (no external dependency).
-                // 2) Optional jpeg-js compatibility fallback.
+                // Prefer native browser decoding path (no external dependency).
                 if (isProgressive && JpegCORE.Config.nativeProgressiveDecode) {
                     const hasCreateImageBitmap = (typeof createImageBitmap === 'function');
                     const hasOffscreenCanvas = (typeof OffscreenCanvas !== 'undefined');
@@ -803,23 +800,7 @@ const JpegCORE = {
                     }
                 }
 
-                // Keep baseline on the existing fast path and route only SOF2 to jpeg-js when available.
-                const jpegJsGlobal = (typeof globalThis !== 'undefined') ? globalThis['jpeg-js'] : null;
-                if (JpegCORE.Config.progressiveFallback && isProgressive && jpegJsGlobal && typeof jpegJsGlobal.decode === 'function') {
-                    const decoded = jpegJsGlobal.decode(d, { useTArray: true, formatAsRGBA: true });
-                    if (decoded && decoded.data && decoded.width && decoded.height) {
-                        return {
-                            preDecodedData: decoded.data,
-                            w: decoded.width,
-                            h: decoded.height,
-                            mode: 'RGBA_FALLBACK',
-                            quantTables: {},
-                            compMap: [],
-                            isProgressiveFallback: true,
-                            decodeBackend: 'jpegjs'
-                        };
-                    }
-                }                // --- Setup Buffer ---
+                // --- Setup Buffer ---
                 const blocksPerMCU = mcuStructure.blocks.length;
                 const cols = Math.ceil(w / (mcuStructure.hMax * 8));
                 const rows = Math.ceil(h / (mcuStructure.vMax * 8));
