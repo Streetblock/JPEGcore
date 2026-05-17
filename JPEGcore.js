@@ -1693,6 +1693,49 @@ const JpegCORE = {
         }
         wh(t, v) { const e = t[v]; this.wbt(e.c, e.l); }
         wbt(b, l) { for (let i = l - 1; i >= 0; i--) { this.byte = (this.byte << 1) | ((b >> i) & 1); this.cnt++; if (this.cnt === 8) { this.buf.push(this.byte); if (this.byte === 0xFF) this.buf.push(0); this.byte = 0; this.cnt = 0; } } }
+    },
+
+    JpegJsCompat: {
+        // jpeg-js compatible async decode wrapper.
+        // Accepts Uint8Array/ArrayBuffer/Buffer/Blob and returns { data, width, height }.
+        decode: async function(input, opts = {}) {
+            const useTArray = opts.useTArray !== false;
+            const formatAsRGBA = opts.formatAsRGBA !== false;
+
+            let blob;
+            if (typeof Blob !== "undefined" && input instanceof Blob) {
+                blob = input;
+            } else if (input instanceof ArrayBuffer) {
+                blob = new Blob([new Uint8Array(input)], { type: "image/jpeg" });
+            } else if (input && typeof input.length === "number") {
+                blob = new Blob([new Uint8Array(input)], { type: "image/jpeg" });
+            } else {
+                throw new Error("JpegJsCompat.decode: unsupported input type");
+            }
+
+            const decoded = await JpegCORE.Decoder.extractBlocksStruct(blob);
+            const imgData = JpegCORE.Decoder.render(decoded, 1.0);
+
+            let data = imgData.data;
+            if (!formatAsRGBA) {
+                const rgb = new Uint8Array(imgData.width * imgData.height * 3);
+                let di = 0;
+                for (let i = 0; i < data.length; i += 4) {
+                    rgb[di++] = data[i];
+                    rgb[di++] = data[i + 1];
+                    rgb[di++] = data[i + 2];
+                }
+                data = rgb;
+            } else if (!useTArray) {
+                data = Array.from(data);
+            }
+
+            return {
+                data,
+                width: imgData.width,
+                height: imgData.height
+            };
+        }
     }
 };
 
