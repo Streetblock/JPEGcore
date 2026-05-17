@@ -4,3 +4,11 @@ jpeg-js-encoder.js
 
 # local benchmark/compare artifacts
 artifacts/
+
+dev/
+
+# Ignore local test images
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
