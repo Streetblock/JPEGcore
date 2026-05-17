@@ -1947,7 +1947,23 @@ const JpegCORE = {
             if (z > 0) this.wh(ha, 0); return b[0];
         }
         wh(t, v) { const e = t[v]; this.wbt(e.c, e.l); }
-        wbt(b, l) { for (let i = l - 1; i >= 0; i--) { this.byte = (this.byte << 1) | ((b >> i) & 1); this.cnt++; if (this.cnt === 8) { this.buf.push(this.byte); if (this.byte === 0xFF) this.buf.push(0); this.byte = 0; this.cnt = 0; } } }
+        wbt(b, l) {
+            this.byte = (this.byte << l) | (b & ((1 << l) - 1));
+            this.cnt += l;
+            if (this.cnt >= 8) {
+                let out = (this.byte >> (this.cnt - 8)) & 0xFF;
+                this.buf.push(out);
+                if (out === 0xFF) this.buf.push(0);
+                this.cnt -= 8;
+                if (this.cnt >= 8) {
+                    out = (this.byte >> (this.cnt - 8)) & 0xFF;
+                    this.buf.push(out);
+                    if (out === 0xFF) this.buf.push(0);
+                    this.cnt -= 8;
+                }
+            }
+            this.byte &= (1 << this.cnt) - 1;
+        }
     },
 
     JpegJsCompat: {
