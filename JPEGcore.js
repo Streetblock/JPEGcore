@@ -14,7 +14,7 @@
 
 const JpegCORE = {
     Config: {
-        nativeProgressiveDecode: true
+        nativeProgressiveDecode: false
     },
     // --- 1. CONSTANTS ---
     Constants: {
@@ -776,7 +776,7 @@ const JpegCORE = {
                     const hasDomCanvas = (typeof document !== 'undefined' && typeof document.createElement === 'function');
                     if (hasCreateImageBitmap && (hasOffscreenCanvas || hasDomCanvas)) {
                         try {
-                            const bitmap = await createImageBitmap(file);
+                            const bitmap = await createImageBitmap(file, { imageOrientation: "none" });
                             const canvas = hasOffscreenCanvas ? new OffscreenCanvas(bitmap.width, bitmap.height) : document.createElement('canvas');
                             if (!hasOffscreenCanvas) { canvas.width = bitmap.width; canvas.height = bitmap.height; }
                             const ctx = canvas.getContext('2d', { willReadFrequently: true });
