@@ -870,13 +870,12 @@ const JpegCORE = {
                                 if (blkIndices.length === 0) { compBlockOrder[compType] = []; return compBlockOrder[compType]; }
 
                                 let hComp = 0, vComp = 0;
-                                const subToBIdx = {};
+                                const subToBIdx = [];
                                 for (const bIdx of blkIndices) {
                                     const def = mcuStructure.blocks[bIdx];
-                                    const key = `${def.dx},${def.dy}`;
-                                    subToBIdx[key] = bIdx;
                                     if (def.dx + 1 > hComp) hComp = def.dx + 1;
                                     if (def.dy + 1 > vComp) vComp = def.dy + 1;
+                                    subToBIdx[(def.dy * 8) + def.dx] = bIdx;
                                 }
 
                                 const ordered = [];
@@ -890,8 +889,7 @@ const JpegCORE = {
                                     for (let bx = 0; bx < compCols; bx++) {
                                         const mcuX = (bx / hComp) | 0;
                                         const subX = bx % hComp;
-                                        const key = `${subX},${subY}`;
-                                        const bIdx = subToBIdx[key];
+                                        const bIdx = subToBIdx[(subY * 8) + subX];
                                         if (bIdx === undefined) continue;
                                         const m = mcuY * cols + mcuX;
                                         ordered.push(m * blocksPerMCU + bIdx);
