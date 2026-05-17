@@ -1578,6 +1578,8 @@ const JpegCORE = {
             this.dctScaleC = this.buildDctScale(this.tC);
             this.dctBasisY = this.buildDctBasis(this.dctScaleY);
             this.dctBasisC = this.buildDctBasis(this.dctScaleC);
+            this.aanScaleY = this.buildAanScale(this.tY);
+            this.aanScaleC = this.buildAanScale(this.tC);
         }
 
         buildDctScale(q) {
@@ -1612,6 +1614,18 @@ const JpegCORE = {
             return basis;
         }
 
+        buildAanScale(q) {
+            const aasf = [1.0, 1.387039845, 1.306562965, 1.175875602, 1.0, 0.785694958, 0.541196100, 0.275899379];
+            const scale = new Float64Array(64);
+            for (let row = 0; row < 8; row++) {
+                for (let col = 0; col < 8; col++) {
+                    const i = row * 8 + col;
+                    scale[i] = 1.0 / (q[i] * aasf[row] * aasf[col] * 8.0);
+                }
+            }
+            return scale;
+        }
+
         computeHuffmanTbl(dcln, dclv, acln, aclv, dccn, dccv, accn, accv) {
             const mh = (L, V) => { let t = [], c = 0, p = 0; for (let i = 1; i <= 16; i++) { for (let j = 0; j < L[i - 1]; j++) { t[V[p++]] = { c, l: i }; c++; } c <<= 1; } return t; };
             this.hLD = mh(dcln, dclv); this.hLA = mh(acln, aclv); this.hCD = mh(dccn, dccv); this.hCA = mh(accn, accv);
@@ -1629,6 +1643,85 @@ const JpegCORE = {
             return r;
         }
 
+        fdctAan(data, scale) {
+            const r = new Int32Array(64);
+            let d0, d1, d2, d3, d4, d5, d6, d7;
+            let off = 0;
+
+            for (let i = 0; i < 8; i++) {
+                d0 = data[off]; d1 = data[off + 1]; d2 = data[off + 2]; d3 = data[off + 3];
+                d4 = data[off + 4]; d5 = data[off + 5]; d6 = data[off + 6]; d7 = data[off + 7];
+
+                let tmp0 = d0 + d7, tmp7 = d0 - d7;
+                let tmp1 = d1 + d6, tmp6 = d1 - d6;
+                let tmp2 = d2 + d5, tmp5 = d2 - d5;
+                let tmp3 = d3 + d4, tmp4 = d3 - d4;
+                let tmp10 = tmp0 + tmp3, tmp13 = tmp0 - tmp3;
+                let tmp11 = tmp1 + tmp2, tmp12 = tmp1 - tmp2;
+
+                data[off] = tmp10 + tmp11;
+                data[off + 4] = tmp10 - tmp11;
+                const z1 = (tmp12 + tmp13) * 0.707106781;
+                data[off + 2] = tmp13 + z1;
+                data[off + 6] = tmp13 - z1;
+
+                tmp10 = tmp4 + tmp5;
+                tmp11 = tmp5 + tmp6;
+                tmp12 = tmp6 + tmp7;
+                const z5 = (tmp10 - tmp12) * 0.382683433;
+                const z2 = 0.541196100 * tmp10 + z5;
+                const z4 = 1.306562965 * tmp12 + z5;
+                const z3 = tmp11 * 0.707106781;
+                const z11 = tmp7 + z3, z13 = tmp7 - z3;
+
+                data[off + 5] = z13 + z2;
+                data[off + 3] = z13 - z2;
+                data[off + 1] = z11 + z4;
+                data[off + 7] = z11 - z4;
+                off += 8;
+            }
+
+            off = 0;
+            for (let i = 0; i < 8; i++) {
+                d0 = data[off]; d1 = data[off + 8]; d2 = data[off + 16]; d3 = data[off + 24];
+                d4 = data[off + 32]; d5 = data[off + 40]; d6 = data[off + 48]; d7 = data[off + 56];
+
+                let tmp0 = d0 + d7, tmp7 = d0 - d7;
+                let tmp1 = d1 + d6, tmp6 = d1 - d6;
+                let tmp2 = d2 + d5, tmp5 = d2 - d5;
+                let tmp3 = d3 + d4, tmp4 = d3 - d4;
+                let tmp10 = tmp0 + tmp3, tmp13 = tmp0 - tmp3;
+                let tmp11 = tmp1 + tmp2, tmp12 = tmp1 - tmp2;
+
+                data[off] = tmp10 + tmp11;
+                data[off + 32] = tmp10 - tmp11;
+                const z1 = (tmp12 + tmp13) * 0.707106781;
+                data[off + 16] = tmp13 + z1;
+                data[off + 48] = tmp13 - z1;
+
+                tmp10 = tmp4 + tmp5;
+                tmp11 = tmp5 + tmp6;
+                tmp12 = tmp6 + tmp7;
+                const z5 = (tmp10 - tmp12) * 0.382683433;
+                const z2 = 0.541196100 * tmp10 + z5;
+                const z4 = 1.306562965 * tmp12 + z5;
+                const z3 = tmp11 * 0.707106781;
+                const z11 = tmp7 + z3, z13 = tmp7 - z3;
+
+                data[off + 40] = z13 + z2;
+                data[off + 24] = z13 - z2;
+                data[off + 8] = z11 + z4;
+                data[off + 56] = z11 - z4;
+                off++;
+            }
+
+            for (let i = 0; i < 64; i++) {
+                const v = data[i] * scale[i];
+                r[i] = v > 0 ? ((v + 0.5) | 0) : ((v - 0.5) | 0);
+            }
+            return r;
+        }
+
         captureBlocks(imgData, mode) {
             const w = imgData.width, h = imgData.height, d = imgData.data;
             const sm = JpegCORE.Constants.SAMPLE_MODES[mode] || JpegCORE.Constants.SAMPLE_MODES['420'];
@@ -1641,7 +1734,7 @@ const JpegCORE = {
                 for (let c = 0; c < cols; c++) {
                     const xBase = c * mcuW, yBase = r * mcuH;
                     for (let b = 0; b < sm.blocks.length; b++) {
-                        const bDef = sm.blocks[b], isChroma = bDef.t === 'C', basis = isChroma ? this.dctBasisC : this.dctBasisY;
+                        const bDef = sm.blocks[b], isChroma = bDef.t === 'C', scale = isChroma ? this.aanScaleC : this.aanScaleY;
                         const stepX = isChroma ? sm.hMax : 1, stepY = isChroma ? sm.vMax : 1;
                         const bOffX = bDef.dx * 8, bOffY = bDef.dy * 8;
 
@@ -1677,7 +1770,7 @@ const JpegCORE = {
                                 }
                             }
                         }
-                        allBlocks.push({ data: this.dct(blkData, basis), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
+                        allBlocks.push({ data: this.fdctAan(blkData, scale), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
                     }
                 }
             }
