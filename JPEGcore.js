@@ -1573,30 +1573,35 @@ const JpegCORE = {
             }
             const H = C.HUFFMAN;
             this.computeHuffmanTbl(H.DC_L_NR, H.DC_L_VAL, H.AC_L_NR, H.AC_L_VAL, H.DC_C_NR, H.DC_C_VAL, H.AC_C_NR, H.AC_C_VAL);
-            this.COS = []; for (let u = 0; u < 8; u++) { this.COS[u] = []; for (let x = 0; x < 8; x++) this.COS[u][x] = Math.cos(((2 * x + 1) * u * Math.PI) / 16); }
-            this.dctScaleY = this.buildDctScale(this.tY);
-            this.dctScaleC = this.buildDctScale(this.tC);
-            this.dctBasisY = this.buildDctBasis(this.dctScaleY);
-            this.dctBasisC = this.buildDctBasis(this.dctScaleC);
             this.aanScaleY = this.buildAanScale(this.tY);
             this.aanScaleC = this.buildAanScale(this.tC);
             this.buildMagnitudeTables();
         }
 
         buildMagnitudeTables() {
+            const cached = this.constructor._magTables;
+            if (cached) {
+                this.magOffset = cached.offset;
+                this.magLen = cached.len;
+                this.magBits = cached.bits;
+                return;
+            }
             const size = 65535, offset = 32767;
-            this.magOffset = offset;
-            this.magLen = new Uint8Array(size);
-            this.magBits = new Uint16Array(size);
+            const len = new Uint8Array(size);
+            const bits = new Uint16Array(size);
             for (let l = 1, lo = 1, hi = 2; l <= 15; l++, lo <<= 1, hi <<= 1) {
                 for (let v = lo; v < hi; v++) {
-                    this.magLen[offset + v] = l;
-                    this.magBits[offset + v] = v;
+                    len[offset + v] = l;
+                    bits[offset + v] = v;
                     const n = -v;
-                    this.magLen[offset + n] = l;
-                    this.magBits[offset + n] = hi - 1 + n;
+                    len[offset + n] = l;
+                    bits[offset + n] = hi - 1 + n;
                 }
             }
+            this.constructor._magTables = { offset, len, bits };
+            this.magOffset = offset;
+            this.magLen = len;
+            this.magBits = bits;
         }
 
         buildDctScale(q) {
