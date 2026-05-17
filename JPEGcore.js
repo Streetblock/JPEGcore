@@ -1950,11 +1950,17 @@ const JpegCORE = {
         wbt(b, l) {
             this.byte = (this.byte << l) | (b & ((1 << l) - 1));
             this.cnt += l;
-            while (this.cnt >= 8) {
-                const out = (this.byte >> (this.cnt - 8)) & 0xFF;
+            if (this.cnt >= 8) {
+                let out = (this.byte >> (this.cnt - 8)) & 0xFF;
                 this.buf.push(out);
                 if (out === 0xFF) this.buf.push(0);
                 this.cnt -= 8;
+                if (this.cnt >= 8) {
+                    out = (this.byte >> (this.cnt - 8)) & 0xFF;
+                    this.buf.push(out);
+                    if (out === 0xFF) this.buf.push(0);
+                    this.cnt -= 8;
+                }
             }
             this.byte &= (1 << this.cnt) - 1;
         }
