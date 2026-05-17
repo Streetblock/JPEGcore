@@ -10,6 +10,7 @@ Repository: [Streetblock/JPEGcore](https://github.com/Streetblock/JPEGcore.git)
 - Progressive JPEG decode path improved and validated
 - Utilities for analysis and image transforms
 - Works in browser and Node.js
+- `jpeg-js` compatible decoder wrapper: `JpegCORE.JpegJsCompat.decode(...)`
 
 ## Install
 
@@ -22,6 +23,27 @@ npm install jpegcore
 ```js
 const JpegCORE = require("jpegcore");
 ```
+
+## jpeg-js Decoder Compatibility
+
+```js
+const JpegCORE = require("jpegcore");
+
+const decoded = await JpegCORE.JpegJsCompat.decode(inputBuffer, {
+  useTArray: true,
+  formatAsRGBA: true
+});
+
+console.log(decoded.width, decoded.height, decoded.data.length);
+```
+
+`decode(...)` returns the same shape as `jpeg-js`: `{ data, width, height }`.
+
+## Performance Note
+
+In a local benchmark with 8 images, 30 rounds and 3 warmups,  
+`JpegCORE.JpegJsCompat.decode` reached about `7.839 MPix/s` vs `6.163 MPix/s` for `jpeg-js.decode`  
+(about `27.18%` faster in that setup).
 
 ## Usage (Browser)
 
