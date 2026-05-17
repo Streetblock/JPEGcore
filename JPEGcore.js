@@ -819,6 +819,8 @@ const JpegCORE = {
                 bp = pos; bb = 0; bc = 0;
                 if (pos < d.length && d[pos] !== 0xFF && d[pos-1] === 0xFF) pos--;
                 let predDC = [0, 0, 0];
+                const compBlockOrderCache = {};
+                const compBlockOffsetsCache = {};
 
                 // --- Scan Loop ---
                 try {
@@ -839,12 +841,25 @@ const JpegCORE = {
                                 const cs = d[pos + 4 + i * 2];
                                 const tdta = d[pos + 5 + i * 2];
                                 const mapObj = compMapList.find(x => x.id === cs);
-                                if (mapObj) comps.push({ type: mapObj.type, dcTbl: (tdta >> 4) & 0xF, acTbl: tdta & 0xF });
+                                if (mapObj) {
+                                    const dcTbl = (tdta >> 4) & 0xF;
+                                    const acTbl = tdta & 0xF;
+                                    comps.push({
+                                        type: mapObj.type,
+                                        dcTbl,
+                                        acTbl,
+                                        dcNode: (tables[0][dcTbl]) ? tables[0][dcTbl] : tables[0][0],
+                                        acNode: (tables[1][acTbl]) ? tables[1][acTbl] : tables[1][0]
+                                    });
+                                }
                             }
                             if (comps.length === 0) comps.push({type:0, dcTbl:0, acTbl:0});
 
                             const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
                             const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
+                            const kStart = (Ss > 1) ? Ss : 1;
+                            const coeff = coeffBuffer;
+                            const zig = ZZ;
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
                             reader.pos= sosEnd;
@@ -863,20 +878,18 @@ const JpegCORE = {
                             }
                             // For non-interleaved scans (Ns=1), JPEG requires component blocks
                             // in left-to-right/top-to-bottom component raster order.
-                            const compBlockOrder = {};
                             const buildCompBlockOrder = (compType) => {
-                                if (compBlockOrder[compType]) return compBlockOrder[compType];
+                                if (compBlockOrderCache[compType]) return compBlockOrderCache[compType];
                                 const blkIndices = typeToIndices[compType] || [];
-                                if (blkIndices.length === 0) { compBlockOrder[compType] = []; return compBlockOrder[compType]; }
+                                if (blkIndices.length === 0) { compBlockOrderCache[compType] = []; return compBlockOrderCache[compType]; }
 
                                 let hComp = 0, vComp = 0;
-                                const subToBIdx = {};
+                                const subToBIdx = [];
                                 for (const bIdx of blkIndices) {
                                     const def = mcuStructure.blocks[bIdx];
-                                    const key = `${def.dx},${def.dy}`;
-                                    subToBIdx[key] = bIdx;
                                     if (def.dx + 1 > hComp) hComp = def.dx + 1;
                                     if (def.dy + 1 > vComp) vComp = def.dy + 1;
+                                    subToBIdx[(def.dy * 8) + def.dx] = bIdx;
                                 }
 
                                 const ordered = [];
@@ -890,159 +903,178 @@ const JpegCORE = {
                                     for (let bx = 0; bx < compCols; bx++) {
                                         const mcuX = (bx / hComp) | 0;
                                         const subX = bx % hComp;
-                                        const key = `${subX},${subY}`;
-                                        const bIdx = subToBIdx[key];
+                                        const bIdx = subToBIdx[(subY * 8) + subX];
                                         if (bIdx === undefined) continue;
                                         const m = mcuY * cols + mcuX;
                                         ordered.push(m * blocksPerMCU + bIdx);
                                     }
                                 }
-                                compBlockOrder[compType] = ordered;
+                                compBlockOrderCache[compType] = ordered;
+                                const offsets = new Int32Array(ordered.length);
+                                for (let i = 0; i < ordered.length; i++) offsets[i] = ordered[i] * 64;
+                                compBlockOffsetsCache[compType] = offsets;
                                 return ordered;
                             };
 
                             let markerFound = false;
 
-                            // --- Main decode loop ---
-                            const decodeOneBlock = (blockOffset, c) => {
-                                        if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; return; }
-
-                                        // --- DC SCAN ---
-                                        if (Ss === 0) {
-                                            const tbl = (tables[0][c.dcTbl]) ? tables[0][c.dcTbl] : tables[0][0];
-                                            if (Ah === 0) {
-                                                let s = rh(tbl);
-                                                if (s === STAT_RST) { predDC = [0,0,0]; s = rh(tbl); }
-                                                if (s === STAT_MARKER || s === null) { markerFound = true; return; }
-                                                let diff = (s === 0) ? 0 : rv(s);
-                                                if (diff === null) { markerFound = true; return; }
-                                                predDC[c.type] += diff;
-                                                coeffBuffer[blockOffset] = predDC[c.type] << Al;
-                                            } else {
-                                                let bit = nb();
-                                                if (bit === STAT_MARKER || bit === null) { markerFound = true; return; }
-                                                if (bit === 1) coeffBuffer[blockOffset] |= (1 << Al);
-                                            }
-                                        }
-
-                                        // --- AC SCAN ---
-                                        if (Se > 0) {
-                                            const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
-                                            const p1 = 1 << Al, m1 = (-1) << Al;
-
-                                            if (Ah === 0) {
-                                                // --- AC FIRST SCAN ---
-                                                if (eob_run > 0) {
-                                                    eob_run--;
-                                                } else {
-                                                    let k = Math.max(Ss, 1);
-                                                    while (k <= Se) {
-                                                        let rs = rh(tbl);
-                                                        if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
-                                                        const r = rs >> 4, s = rs & 15;
-                                                        if (s === 0) {
-                                                            if (r < 15) {
-                                                                let extra = readRawBits(r);
-                                                                if (extra === STAT_MARKER || extra === STAT_RST || extra === null) { markerFound = true; break; }
-                                                                eob_run = (1 << r) + extra - 1;
-                                                                break;
-                                                            } else { k += 15; }
-                                                        } else {
-                                                            k += r;
-                                                            let val = rv(s);
-                                                            if (val === null) { markerFound = true; break; }
-                                                            if (k <= Se) coeffBuffer[blockOffset + ZZ[k]] = val << Al;
-                                                        }
-                                                        k++;
-                                                    }
-                                                }
-                                            } else {
-                                                // --- AC SUCCESSIVE (Refinement) ---
-                                                let k = Math.max(Ss, 1);
-                                                while (k <= Se) {
-                                                    const idx = blockOffset + ZZ[k];
-                                                    const direction = coeffBuffer[idx] < 0 ? -1 : 1;
-
-                                                    switch (successiveACState) {
-                                                        case 0: {
-                                                            let rs = rh(tbl);
-                                                            if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
-                                                            const s = rs & 15;
-                                                            acRun = rs >> 4;
-
-                                                            if (s === 0) {
-                                                                if (acRun < 15) {
-                                                                    let extra = readRawBits(acRun);
-                                                                    if (extra === STAT_MARKER || extra === STAT_RST || extra === null) { markerFound = true; break; }
-                                                                    eob_run = (1 << acRun) + extra;
-                                                                    successiveACState = 4;
-                                                                } else {
-                                                                    acRun = 16;
-                                                                    successiveACState = 1;
-                                                                }
-                                                            } else {
-                                                                if (s !== 1) { markerFound = true; break; }
-                                                                let nextValue = rv(s);
-                                                                if (nextValue === null) { markerFound = true; break; }
-                                                                successiveACNextValue = nextValue;
-                                                                successiveACState = acRun ? 2 : 3;
-                                                            }
-                                                            continue;
-                                                        }
-
-                                                        case 1:
-                                                        case 2: {
-                                                            if (coeffBuffer[idx] !== 0) {
-                                                                let bit = nb();
-                                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) coeffBuffer[idx] += (direction > 0) ? p1 : m1;
-                                                            } else {
-                                                                acRun--;
-                                                                if (acRun === 0) successiveACState = (successiveACState === 2) ? 3 : 0;
-                                                            }
-                                                            break;
-                                                        }
-
-                                                        case 3: {
-                                                            if (coeffBuffer[idx] !== 0) {
-                                                                let bit = nb();
-                                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) coeffBuffer[idx] += (direction > 0) ? p1 : m1;
-                                                            } else {
-                                                                coeffBuffer[idx] = successiveACNextValue << Al;
-                                                                successiveACState = 0;
-                                                            }
-                                                            break;
-                                                        }
-
-                                                        case 4: {
-                                                            if (coeffBuffer[idx] !== 0) {
-                                                                let bit = nb();
-                                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
-                                                                if (bit === 1) coeffBuffer[idx] += (direction > 0) ? p1 : m1;
-                                                            }
-                                                            break;
-                                                        }
-                                                    }
-
-                                                    if (markerFound) break;
-                                                    k++;
-                                                }
-
-                                                if (markerFound) return;
-                                                if (successiveACState === 4) {
-                                                    eob_run--;
-                                                    if (eob_run === 0) successiveACState = 0;
-                                                }
-                                            }
-                                        }
+                            const decodeDCFirst = (blockOffset, c) => {
+                                let s = rh(c.dcNode);
+                                if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(c.dcNode); }
+                                if (s === STAT_MARKER || s === null) { markerFound = true; return; }
+                                let diff = (s === 0) ? 0 : rv(s);
+                                if (diff === null) { markerFound = true; return; }
+                                predDC[c.type] += diff;
+                                coeff[blockOffset] = predDC[c.type] << Al;
                             };
+                            const decodeDCSuccessive = (blockOffset) => {
+                                let bit = nb();
+                                if (bit === STAT_MARKER || bit === null) { markerFound = true; return; }
+                                if (bit === 1) coeff[blockOffset] |= (1 << Al);
+                            };
+                            const decodeACFirst = (blockOffset, c) => {
+                                if (eob_run > 0) { eob_run--; return; }
+                                let k = kStart;
+                                while (k <= Se) {
+                                    let rs = rh(c.acNode);
+                                    if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
+                                    const r = rs >> 4, s = rs & 15;
+                                    if (s === 0) {
+                                        if (r < 15) {
+                                            let extra = readRawBits(r);
+                                            if (extra === STAT_MARKER || extra === STAT_RST || extra === null) { markerFound = true; break; }
+                                            eob_run = (1 << r) + extra - 1;
+                                            break;
+                                        }
+                                        k += 15;
+                                    } else {
+                                        k += r;
+                                        let val = rv(s);
+                                        if (val === null) { markerFound = true; break; }
+                                        if (k <= Se) coeff[blockOffset + zig[k]] = val << Al;
+                                    }
+                                    k++;
+                                }
+                            };
+                            const decodeACSuccessive = (blockOffset, c) => {
+                                const p1 = 1 << Al, m1 = (-1) << Al;
+                                let k = kStart;
+                                while (k <= Se) {
+                                    const idx = blockOffset + zig[k];
+                                    const direction = coeff[idx] < 0 ? -1 : 1;
+                                    switch (successiveACState) {
+                                        case 0: {
+                                            let rs = rh(c.acNode);
+                                            if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
+                                            const s = rs & 15;
+                                            acRun = rs >> 4;
+                                            if (s === 0) {
+                                                if (acRun < 15) {
+                                                    let extra = readRawBits(acRun);
+                                                    if (extra === STAT_MARKER || extra === STAT_RST || extra === null) { markerFound = true; break; }
+                                                    eob_run = (1 << acRun) + extra;
+                                                    successiveACState = 4;
+                                                } else {
+                                                    acRun = 16;
+                                                    successiveACState = 1;
+                                                }
+                                            } else {
+                                                if (s !== 1) { markerFound = true; break; }
+                                                let nextValue = rv(s);
+                                                if (nextValue === null) { markerFound = true; break; }
+                                                successiveACNextValue = nextValue;
+                                                successiveACState = acRun ? 2 : 3;
+                                            }
+                                            continue;
+                                        }
+                                        case 1:
+                                        case 2: {
+                                            if (coeff[idx] !== 0) {
+                                                let bit = nb();
+                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
+                                                if (bit === 1) coeff[idx] += (direction > 0) ? p1 : m1;
+                                            } else {
+                                                acRun--;
+                                                if (acRun === 0) successiveACState = (successiveACState === 2) ? 3 : 0;
+                                            }
+                                            break;
+                                        }
+                                        case 3: {
+                                            if (coeff[idx] !== 0) {
+                                                let bit = nb();
+                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
+                                                if (bit === 1) coeff[idx] += (direction > 0) ? p1 : m1;
+                                            } else {
+                                                coeff[idx] = successiveACNextValue << Al;
+                                                successiveACState = 0;
+                                            }
+                                            break;
+                                        }
+                                        case 4: {
+                                            if (coeff[idx] !== 0) {
+                                                let bit = nb();
+                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
+                                                if (bit === 1) coeff[idx] += (direction > 0) ? p1 : m1;
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    if (markerFound) break;
+                                    k++;
+                                }
+                                if (!markerFound && successiveACState === 4) {
+                                    eob_run--;
+                                    if (eob_run === 0) successiveACState = 0;
+                                }
+                            };
+                            const decodeBaselineSequential = (blockOffset, c) => {
+                                let s = rh(c.dcNode);
+                                if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(c.dcNode); }
+                                if (s === STAT_MARKER || s === null) { markerFound = true; return; }
+                                let diff = (s === 0) ? 0 : rv(s);
+                                if (diff === null) { markerFound = true; return; }
+                                predDC[c.type] += diff;
+                                coeff[blockOffset] = predDC[c.type];
+
+                                let k = 1;
+                                while (k < 64) {
+                                    let rs = rh(c.acNode);
+                                    if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
+                                    const r = rs >> 4, acs = rs & 15;
+                                    if (acs === 0) {
+                                        if (r < 15) break;
+                                        k += 16;
+                                        continue;
+                                    }
+                                    k += r;
+                                    let val = rv(acs);
+                                    if (val === null) { markerFound = true; break; }
+                                    if (k < 64) coeff[blockOffset + zig[k]] = val;
+                                    k++;
+                                }
+                            };
+
+                            let decodeBlockFn;
+                            if (Ss === 0 && Se === 63 && Ah === 0) {
+                                decodeBlockFn = (blockOffset, c) => decodeBaselineSequential(blockOffset, c);
+                            } else if (Ss === 0) {
+                                decodeBlockFn = (Ah === 0)
+                                    ? (blockOffset, c) => decodeDCFirst(blockOffset, c)
+                                    : (blockOffset) => decodeDCSuccessive(blockOffset);
+                            } else if (Ah === 0) {
+                                decodeBlockFn = (blockOffset, c) => decodeACFirst(blockOffset, c);
+                            } else {
+                                decodeBlockFn = (blockOffset, c) => decodeACSuccessive(blockOffset, c);
+                            }
 
                             if (ns === 1 && comps.length === 1) {
                                 const c = comps[0];
-                                const orderedBlocks = buildCompBlockOrder(c.type);
-                                for (let gIdx of orderedBlocks) {
-                                    decodeOneBlock(gIdx * 64, c);
+                                if (!compBlockOffsetsCache[c.type]) buildCompBlockOrder(c.type);
+                                const orderedOffsets = compBlockOffsetsCache[c.type] || new Int32Array(0);
+                                for (let i = 0; i < orderedOffsets.length; i++) {
+                                    const blockOffset = orderedOffsets[i];
+                                    if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
+                                    decodeBlockFn(blockOffset, c);
                                     if (markerFound) break;
                                 }
                             } else {
@@ -1052,7 +1084,8 @@ const JpegCORE = {
                                         if (!blkIndices) continue;
                                         for (let bIdx of blkIndices) {
                                             const blockOffset = (m * blocksPerMCU + bIdx) * 64;
-                                            decodeOneBlock(blockOffset, c);
+                                            if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
+                                            decodeBlockFn(blockOffset, c);
                                             if (markerFound) break;
                                         }
                                         if (markerFound) break;
