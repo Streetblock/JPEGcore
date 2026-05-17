@@ -1,3 +1,6 @@
 ﻿# local helper libs not tracked
 jpeg-js-decoder.js
 jpeg-js-encoder.js
+
+# local benchmark/compare artifacts
+artifacts/
