@@ -1628,6 +1628,16 @@ const JpegCORE = {
                                     const idx = (py * w + px) * 4;
                                     const R = d[idx], G = d[idx + 1], B = d[idx + 2];
                                     blkData[by * 8 + bx] = 0.299 * R + 0.587 * G + 0.114 * B - 128;
+                                } else if (sm.hMax === 2 && sm.vMax === 2) {
+                                    let px0 = xBase + bx * 2, px1 = px0 + 1, py0 = yBase + by * 2, py1 = py0 + 1;
+                                    if (px0 >= w) px0 = w - 1; if (px1 >= w) px1 = w - 1;
+                                    if (py0 >= h) py0 = h - 1; if (py1 >= h) py1 = h - 1;
+                                    const idx00 = (py0 * w + px0) * 4, idx01 = (py0 * w + px1) * 4;
+                                    const idx10 = (py1 * w + px0) * 4, idx11 = (py1 * w + px1) * 4;
+                                    const R = (d[idx00] + d[idx01] + d[idx10] + d[idx11]) * 0.25;
+                                    const G = (d[idx00 + 1] + d[idx01 + 1] + d[idx10 + 1] + d[idx11 + 1]) * 0.25;
+                                    const B = (d[idx00 + 2] + d[idx01 + 2] + d[idx10 + 2] + d[idx11 + 2]) * 0.25;
+                                    blkData[by * 8 + bx] = (bDef.c === 0) ? -0.1687 * R - 0.3313 * G + 0.5 * B : 0.5 * R - 0.4187 * G - 0.0813 * B;
                                 } else {
                                     let sumR = 0, sumG = 0, sumB = 0, count = 0;
                                     for (let sy = 0; sy < stepY; sy++) {
