@@ -1609,17 +1609,24 @@ const JpegCORE = {
 
                         for (let by = 0; by < 8; by++) {
                             for (let bx = 0; bx < 8; bx++) {
-                                let sumR = 0, sumG = 0, sumB = 0, count = 0;
-                                for (let sy = 0; sy < stepY; sy++) {
-                                    for (let sx = 0; sx < stepX; sx++) {
-                                        let px = xBase + bOffX * stepX + bx * stepX + sx, py = yBase + bOffY * stepY + by * stepY + sy;
-                                        if (px >= w) px = w - 1; if (py >= h) py = h - 1;
-                                        const idx = (py * w + px) * 4; sumR += d[idx]; sumG += d[idx + 1]; sumB += d[idx + 2]; count++;
+                                if (!isChroma) {
+                                    let px = xBase + bOffX + bx, py = yBase + bOffY + by;
+                                    if (px >= w) px = w - 1; if (py >= h) py = h - 1;
+                                    const idx = (py * w + px) * 4;
+                                    const R = d[idx], G = d[idx + 1], B = d[idx + 2];
+                                    blkData[by * 8 + bx] = 0.299 * R + 0.587 * G + 0.114 * B - 128;
+                                } else {
+                                    let sumR = 0, sumG = 0, sumB = 0, count = 0;
+                                    for (let sy = 0; sy < stepY; sy++) {
+                                        for (let sx = 0; sx < stepX; sx++) {
+                                            let px = xBase + bOffX * stepX + bx * stepX + sx, py = yBase + bOffY * stepY + by * stepY + sy;
+                                            if (px >= w) px = w - 1; if (py >= h) py = h - 1;
+                                            const idx = (py * w + px) * 4; sumR += d[idx]; sumG += d[idx + 1]; sumB += d[idx + 2]; count++;
+                                        }
                                     }
+                                    const R = sumR / count, G = sumG / count, B = sumB / count;
+                                    blkData[by * 8 + bx] = (bDef.c === 0) ? -0.1687 * R - 0.3313 * G + 0.5 * B : 0.5 * R - 0.4187 * G - 0.0813 * B;
                                 }
-                                const R = sumR / count, G = sumG / count, B = sumB / count;
-                                if (!isChroma) blkData[by * 8 + bx] = 0.299 * R + 0.587 * G + 0.114 * B - 128;
-                                else blkData[by * 8 + bx] = (bDef.c === 0) ? -0.1687 * R - 0.3313 * G + 0.5 * B : 0.5 * R - 0.4187 * G - 0.0813 * B;
                             }
                         }
                         allBlocks.push({ data: this.dct(blkData, qTable), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
