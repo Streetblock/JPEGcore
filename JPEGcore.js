@@ -1576,6 +1576,8 @@ const JpegCORE = {
             this.COS = []; for (let u = 0; u < 8; u++) { this.COS[u] = []; for (let x = 0; x < 8; x++) this.COS[u][x] = Math.cos(((2 * x + 1) * u * Math.PI) / 16); }
             this.dctScaleY = this.buildDctScale(this.tY);
             this.dctScaleC = this.buildDctScale(this.tC);
+            this.dctBasisY = this.buildDctBasis(this.dctScaleY);
+            this.dctBasisC = this.buildDctBasis(this.dctScaleC);
         }
 
         buildDctScale(q) {
@@ -1590,29 +1592,39 @@ const JpegCORE = {
             return scale;
         }
 
+        buildDctBasis(scale) {
+            const basis = new Float64Array(4096);
+            const COS = this.COS;
+            for (let u = 0; u < 8; u++) {
+                const cu = COS[u];
+                for (let v = 0; v < 8; v++) {
+                    const cv = COS[v];
+                    const out = u * 8 + v;
+                    const base = out * 64;
+                    const coeffScale = scale[out];
+                    for (let x = 0; x < 8; x++) {
+                        const rowBase = x * 8;
+                        const ux = cu[x] * coeffScale;
+                        for (let y = 0; y < 8; y++) basis[base + rowBase + y] = ux * cv[y];
+                    }
+                }
+            }
+            return basis;
+        }
+
         computeHuffmanTbl(dcln, dclv, acln, aclv, dccn, dccv, accn, accv) {
             const mh = (L, V) => { let t = [], c = 0, p = 0; for (let i = 1; i <= 16; i++) { for (let j = 0; j < L[i - 1]; j++) { t[V[p++]] = { c, l: i }; c++; } c <<= 1; } return t; };
             this.hLD = mh(dcln, dclv); this.hLA = mh(acln, aclv); this.hCD = mh(dccn, dccv); this.hCA = mh(accn, accv);
             this.curHT = { dcln, dclv, acln, aclv, dccn, dccv, accn, accv };
         }
 
-        dct(b, scale) {
+        dct(b, basis) {
             const r = new Int32Array(64);
-            const COS = this.COS;
-            for (let u = 0; u < 8; u++) {
-                const cu = COS[u];
-                const outBase = u * 8;
-                for (let v = 0; v < 8; v++) {
-                    const cv = COS[v];
-                    let s = 0;
-                    for (let x = 0; x < 8; x++) {
-                        const rowBase = x * 8;
-                        const ux = cu[x];
-                        for (let y = 0; y < 8; y++) s += b[rowBase + y] * ux * cv[y];
-                    }
-                    const out = outBase + v;
-                    r[out] = Math.round(scale[out] * s);
-                }
+            for (let out = 0; out < 64; out++) {
+                const base = out * 64;
+                let s = 0;
+                for (let i = 0; i < 64; i++) s += b[i] * basis[base + i];
+                r[out] = Math.round(s);
             }
             return r;
         }
@@ -1628,7 +1640,7 @@ const JpegCORE = {
                 for (let c = 0; c < cols; c++) {
                     const xBase = c * mcuW, yBase = r * mcuH;
                     for (let b = 0; b < sm.blocks.length; b++) {
-                        const bDef = sm.blocks[b], isChroma = bDef.t === 'C', scale = isChroma ? this.dctScaleC : this.dctScaleY;
+                        const bDef = sm.blocks[b], isChroma = bDef.t === 'C', basis = isChroma ? this.dctBasisC : this.dctBasisY;
                         const blkData = new Float32Array(64);
                         const stepX = isChroma ? sm.hMax : 1, stepY = isChroma ? sm.vMax : 1;
                         const bOffX = bDef.dx * 8, bOffY = bDef.dy * 8;
@@ -1665,7 +1677,7 @@ const JpegCORE = {
                                 }
                             }
                         }
-                        allBlocks.push({ data: this.dct(blkData, scale), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
+                        allBlocks.push({ data: this.dct(blkData, basis), type: bDef.t, comp: isChroma ? (bDef.c === 0 ? 1 : 2) : 0 });
                     }
                 }
             }
