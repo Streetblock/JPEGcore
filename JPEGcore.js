@@ -841,12 +841,23 @@ const JpegCORE = {
                                 const cs = d[pos + 4 + i * 2];
                                 const tdta = d[pos + 5 + i * 2];
                                 const mapObj = compMapList.find(x => x.id === cs);
-                                if (mapObj) comps.push({ type: mapObj.type, dcTbl: (tdta >> 4) & 0xF, acTbl: tdta & 0xF });
+                                if (mapObj) {
+                                    const dcTbl = (tdta >> 4) & 0xF;
+                                    const acTbl = tdta & 0xF;
+                                    comps.push({
+                                        type: mapObj.type,
+                                        dcTbl,
+                                        acTbl,
+                                        dcNode: (tables[0][dcTbl]) ? tables[0][dcTbl] : tables[0][0],
+                                        acNode: (tables[1][acTbl]) ? tables[1][acTbl] : tables[1][0]
+                                    });
+                                }
                             }
                             if (comps.length === 0) comps.push({type:0, dcTbl:0, acTbl:0});
 
                             const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
                             const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
+                            const kStart = (Ss > 1) ? Ss : 1;
                             const coeff = coeffBuffer;
                             const zig = ZZ;
 
@@ -908,9 +919,8 @@ const JpegCORE = {
                             let markerFound = false;
 
                             const decodeDCFirst = (blockOffset, c) => {
-                                const tbl = (tables[0][c.dcTbl]) ? tables[0][c.dcTbl] : tables[0][0];
-                                let s = rh(tbl);
-                                if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(tbl); }
+                                let s = rh(c.dcNode);
+                                if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(c.dcNode); }
                                 if (s === STAT_MARKER || s === null) { markerFound = true; return; }
                                 let diff = (s === 0) ? 0 : rv(s);
                                 if (diff === null) { markerFound = true; return; }
@@ -923,11 +933,10 @@ const JpegCORE = {
                                 if (bit === 1) coeff[blockOffset] |= (1 << Al);
                             };
                             const decodeACFirst = (blockOffset, c) => {
-                                const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
                                 if (eob_run > 0) { eob_run--; return; }
-                                let k = Math.max(Ss, 1);
+                                let k = kStart;
                                 while (k <= Se) {
-                                    let rs = rh(tbl);
+                                    let rs = rh(c.acNode);
                                     if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
                                     const r = rs >> 4, s = rs & 15;
                                     if (s === 0) {
@@ -948,15 +957,14 @@ const JpegCORE = {
                                 }
                             };
                             const decodeACSuccessive = (blockOffset, c) => {
-                                const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
                                 const p1 = 1 << Al, m1 = (-1) << Al;
-                                let k = Math.max(Ss, 1);
+                                let k = kStart;
                                 while (k <= Se) {
                                     const idx = blockOffset + zig[k];
                                     const direction = coeff[idx] < 0 ? -1 : 1;
                                     switch (successiveACState) {
                                         case 0: {
-                                            let rs = rh(tbl);
+                                            let rs = rh(c.acNode);
                                             if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
                                             const s = rs & 15;
                                             acRun = rs >> 4;
@@ -1020,19 +1028,17 @@ const JpegCORE = {
                                 }
                             };
                             const decodeBaselineSequential = (blockOffset, c) => {
-                                const dcTbl = (tables[0][c.dcTbl]) ? tables[0][c.dcTbl] : tables[0][0];
-                                let s = rh(dcTbl);
-                                if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(dcTbl); }
+                                let s = rh(c.dcNode);
+                                if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(c.dcNode); }
                                 if (s === STAT_MARKER || s === null) { markerFound = true; return; }
                                 let diff = (s === 0) ? 0 : rv(s);
                                 if (diff === null) { markerFound = true; return; }
                                 predDC[c.type] += diff;
                                 coeff[blockOffset] = predDC[c.type];
 
-                                const acTbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
                                 let k = 1;
                                 while (k < 64) {
-                                    let rs = rh(acTbl);
+                                    let rs = rh(c.acNode);
                                     if (rs === STAT_MARKER || rs === STAT_RST || rs === null) { markerFound = true; break; }
                                     const r = rs >> 4, acs = rs & 15;
                                     if (acs === 0) {
