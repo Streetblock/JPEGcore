@@ -819,6 +819,8 @@ const JpegCORE = {
                 bp = pos; bb = 0; bc = 0;
                 if (pos < d.length && d[pos] !== 0xFF && d[pos-1] === 0xFF) pos--;
                 let predDC = [0, 0, 0];
+                const compBlockOrderCache = {};
+                const compBlockOffsetsCache = {};
 
                 // --- Scan Loop ---
                 try {
@@ -845,6 +847,8 @@ const JpegCORE = {
 
                             const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
                             const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
+                            const coeff = coeffBuffer;
+                            const zig = ZZ;
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
                             reader.pos= sosEnd;
@@ -863,11 +867,10 @@ const JpegCORE = {
                             }
                             // For non-interleaved scans (Ns=1), JPEG requires component blocks
                             // in left-to-right/top-to-bottom component raster order.
-                            const compBlockOrder = {};
                             const buildCompBlockOrder = (compType) => {
-                                if (compBlockOrder[compType]) return compBlockOrder[compType];
+                                if (compBlockOrderCache[compType]) return compBlockOrderCache[compType];
                                 const blkIndices = typeToIndices[compType] || [];
-                                if (blkIndices.length === 0) { compBlockOrder[compType] = []; return compBlockOrder[compType]; }
+                                if (blkIndices.length === 0) { compBlockOrderCache[compType] = []; return compBlockOrderCache[compType]; }
 
                                 let hComp = 0, vComp = 0;
                                 const subToBIdx = [];
@@ -895,7 +898,10 @@ const JpegCORE = {
                                         ordered.push(m * blocksPerMCU + bIdx);
                                     }
                                 }
-                                compBlockOrder[compType] = ordered;
+                                compBlockOrderCache[compType] = ordered;
+                                const offsets = new Int32Array(ordered.length);
+                                for (let i = 0; i < ordered.length; i++) offsets[i] = ordered[i] * 64;
+                                compBlockOffsetsCache[compType] = offsets;
                                 return ordered;
                             };
 
@@ -909,12 +915,12 @@ const JpegCORE = {
                                 let diff = (s === 0) ? 0 : rv(s);
                                 if (diff === null) { markerFound = true; return; }
                                 predDC[c.type] += diff;
-                                coeffBuffer[blockOffset] = predDC[c.type] << Al;
+                                coeff[blockOffset] = predDC[c.type] << Al;
                             };
                             const decodeDCSuccessive = (blockOffset) => {
                                 let bit = nb();
                                 if (bit === STAT_MARKER || bit === null) { markerFound = true; return; }
-                                if (bit === 1) coeffBuffer[blockOffset] |= (1 << Al);
+                                if (bit === 1) coeff[blockOffset] |= (1 << Al);
                             };
                             const decodeACFirst = (blockOffset, c) => {
                                 const tbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
@@ -936,7 +942,7 @@ const JpegCORE = {
                                         k += r;
                                         let val = rv(s);
                                         if (val === null) { markerFound = true; break; }
-                                        if (k <= Se) coeffBuffer[blockOffset + ZZ[k]] = val << Al;
+                                        if (k <= Se) coeff[blockOffset + zig[k]] = val << Al;
                                     }
                                     k++;
                                 }
@@ -946,8 +952,8 @@ const JpegCORE = {
                                 const p1 = 1 << Al, m1 = (-1) << Al;
                                 let k = Math.max(Ss, 1);
                                 while (k <= Se) {
-                                    const idx = blockOffset + ZZ[k];
-                                    const direction = coeffBuffer[idx] < 0 ? -1 : 1;
+                                    const idx = blockOffset + zig[k];
+                                    const direction = coeff[idx] < 0 ? -1 : 1;
                                     switch (successiveACState) {
                                         case 0: {
                                             let rs = rh(tbl);
@@ -975,10 +981,10 @@ const JpegCORE = {
                                         }
                                         case 1:
                                         case 2: {
-                                            if (coeffBuffer[idx] !== 0) {
+                                            if (coeff[idx] !== 0) {
                                                 let bit = nb();
                                                 if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
-                                                if (bit === 1) coeffBuffer[idx] += (direction > 0) ? p1 : m1;
+                                                if (bit === 1) coeff[idx] += (direction > 0) ? p1 : m1;
                                             } else {
                                                 acRun--;
                                                 if (acRun === 0) successiveACState = (successiveACState === 2) ? 3 : 0;
@@ -986,21 +992,21 @@ const JpegCORE = {
                                             break;
                                         }
                                         case 3: {
-                                            if (coeffBuffer[idx] !== 0) {
+                                            if (coeff[idx] !== 0) {
                                                 let bit = nb();
                                                 if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
-                                                if (bit === 1) coeffBuffer[idx] += (direction > 0) ? p1 : m1;
+                                                if (bit === 1) coeff[idx] += (direction > 0) ? p1 : m1;
                                             } else {
-                                                coeffBuffer[idx] = successiveACNextValue << Al;
+                                                coeff[idx] = successiveACNextValue << Al;
                                                 successiveACState = 0;
                                             }
                                             break;
                                         }
                                         case 4: {
-                                            if (coeffBuffer[idx] !== 0) {
+                                            if (coeff[idx] !== 0) {
                                                 let bit = nb();
                                                 if (bit === STAT_MARKER || bit === STAT_RST || bit === null) { markerFound = true; break; }
-                                                if (bit === 1) coeffBuffer[idx] += (direction > 0) ? p1 : m1;
+                                                if (bit === 1) coeff[idx] += (direction > 0) ? p1 : m1;
                                             }
                                             break;
                                         }
@@ -1021,7 +1027,7 @@ const JpegCORE = {
                                 let diff = (s === 0) ? 0 : rv(s);
                                 if (diff === null) { markerFound = true; return; }
                                 predDC[c.type] += diff;
-                                coeffBuffer[blockOffset] = predDC[c.type];
+                                coeff[blockOffset] = predDC[c.type];
 
                                 const acTbl = (tables[1][c.acTbl]) ? tables[1][c.acTbl] : tables[1][0];
                                 let k = 1;
@@ -1037,7 +1043,7 @@ const JpegCORE = {
                                     k += r;
                                     let val = rv(acs);
                                     if (val === null) { markerFound = true; break; }
-                                    if (k < 64) coeffBuffer[blockOffset + ZZ[k]] = val;
+                                    if (k < 64) coeff[blockOffset + zig[k]] = val;
                                     k++;
                                 }
                             };
@@ -1057,9 +1063,10 @@ const JpegCORE = {
 
                             if (ns === 1 && comps.length === 1) {
                                 const c = comps[0];
-                                const orderedBlocks = buildCompBlockOrder(c.type);
-                                for (let gIdx of orderedBlocks) {
-                                    const blockOffset = gIdx * 64;
+                                if (!compBlockOffsetsCache[c.type]) buildCompBlockOrder(c.type);
+                                const orderedOffsets = compBlockOffsetsCache[c.type] || new Int32Array(0);
+                                for (let i = 0; i < orderedOffsets.length; i++) {
+                                    const blockOffset = orderedOffsets[i];
                                     if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
                                     decodeBlockFn(blockOffset, c);
                                     if (markerFound) break;
