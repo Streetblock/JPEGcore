@@ -1,7 +1,18 @@
 {
-  "name": "jpegcore-repo",
-  "private": true,
-  "version": "0.0.0",
+  "name": "jpegcore",
+  "version": "1.0.0",
+  "description": "Pure JavaScript JPEG encoder/decoder/transform library with improved progressive decoding",
+  "license": "UNLICENSED",
+  "main": "JPEGcore.js",
+  "exports": {
+    ".": "./JPEGcore.js"
+  },
+  "files": [
+    "JPEGcore.js",
+    "index.html",
+    "benchmarks",
+    "tests"
+  ],
   "scripts": {
     "test": "node tests/smoke.test.js"
   }
