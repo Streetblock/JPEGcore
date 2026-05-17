@@ -1635,13 +1635,13 @@ const JpegCORE = {
             const mcuW = sm.hMax * 8, mcuH = sm.vMax * 8;
             const cols = Math.ceil(w / mcuW), rows = Math.ceil(h / mcuH);
             const allBlocks = [];
+            const blkData = new Float32Array(64);
 
             for (let r = 0; r < rows; r++) {
                 for (let c = 0; c < cols; c++) {
                     const xBase = c * mcuW, yBase = r * mcuH;
                     for (let b = 0; b < sm.blocks.length; b++) {
                         const bDef = sm.blocks[b], isChroma = bDef.t === 'C', basis = isChroma ? this.dctBasisC : this.dctBasisY;
-                        const blkData = new Float32Array(64);
                         const stepX = isChroma ? sm.hMax : 1, stepY = isChroma ? sm.vMax : 1;
                         const bOffX = bDef.dx * 8, bOffY = bDef.dy * 8;
 
