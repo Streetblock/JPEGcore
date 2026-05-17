@@ -899,8 +899,10 @@ const JpegCORE = {
                                 }
 
                                 const ordered = [];
-                                const compCols = cols * hComp;
-                                const compRows = rows * vComp;
+                                // For non-interleaved scans, decode only the component's real block raster
+                                // (not the padded MCU grid for other components).
+                                const compCols = Math.ceil((w * hComp) / (mcuStructure.hMax * 8));
+                                const compRows = Math.ceil((h * vComp) / (mcuStructure.vMax * 8));
                                 for (let by = 0; by < compRows; by++) {
                                     const mcuY = (by / vComp) | 0;
                                     const subY = by % vComp;
