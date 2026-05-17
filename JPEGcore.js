@@ -1665,8 +1665,8 @@ const JpegCORE = {
             return r;
         }
 
-        fdctAan(data, scale) {
-            const r = new Int32Array(64);
+        fdctAan(data, scale, out) {
+            const r = out || new Int32Array(64);
             let d0, d1, d2, d3, d4, d5, d6, d7;
             let off = 0;
 
@@ -1849,6 +1849,90 @@ const JpegCORE = {
             return new Uint8Array(this.buf);
         }
 
+        encodeImageData(imgData, mode) {
+            this.buf = []; this.byte = 0; this.cnt = 0;
+            const M = JpegCORE.Constants.MARKERS;
+            const wr = (v) => { this.buf.push((v >> 8) & 0xFF, v & 0xFF); }, wb = (v) => { this.buf.push(v); };
+            const w = imgData.width, h = imgData.height, d = imgData.data;
+            const sm = JpegCORE.Constants.SAMPLE_MODES[mode] || JpegCORE.Constants.SAMPLE_MODES['420'];
+            const isGray = mode === 'GRAY', numComps = isGray ? 1 : 3;
+
+            const toZigZag = (n) => {
+                const zz = new Uint8Array(64);
+                const Z = JpegCORE.Constants.ZIG_ZAG_ARR;
+                for (let i = 0; i < 64; i++) zz[i] = n[Z[i]];
+                return zz;
+            };
+
+            wr(0xFF00 | M.SOI);
+            wr(0xFF00 | M.APP0); wr(16); [0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0].forEach(wb);
+            wr(0xFF00 | M.DQT); wr(132);
+            wb(0); toZigZag(this.tY).forEach(v => wb(v));
+            wb(1); toZigZag(this.tC).forEach(v => wb(v));
+            wr(0xFF00 | M.SOF0); wr(8 + 3 * numComps); wb(8); wr(h); wr(w); wb(numComps); wb(1); wb((sm.hMax << 4) | sm.vMax); wb(0);
+            if (!isGray) { wb(2); wb(0x11); wb(1); wb(3); wb(0x11); wb(1); }
+            let len = 6, ht = this.curHT; [ht.dclv, ht.aclv, ht.dccv, ht.accv].forEach(v => len += 16 + v.length);
+            wr(0xFF00 | M.DHT); wr(len); wb(0x00); ht.dcln.forEach(wb); ht.dclv.forEach(wb); wb(0x10); ht.acln.forEach(wb); ht.aclv.forEach(wb); wb(0x01); ht.dccn.forEach(wb); ht.dccv.forEach(wb); wb(0x11); ht.accn.forEach(wb); ht.accv.forEach(wb);
+            wr(0xFF00 | M.SOS); wr(6 + 2 * numComps); wb(numComps); wb(1); wb(0); if (!isGray) { wb(2); wb(0x11); wb(3); wb(0x11); } wb(0); wb(63); wb(0);
+
+            const mcuW = sm.hMax * 8, mcuH = sm.vMax * 8;
+            const cols = Math.ceil(w / mcuW), rows = Math.ceil(h / mcuH);
+            const blkData = new Float32Array(64);
+            const coeffData = new Int32Array(64);
+            const pd = [0, 0, 0];
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const xBase = c * mcuW, yBase = r * mcuH;
+                    for (let b = 0; b < sm.blocks.length; b++) {
+                        const bDef = sm.blocks[b], isChroma = bDef.t === 'C', scale = isChroma ? this.aanScaleC : this.aanScaleY;
+                        const stepX = isChroma ? sm.hMax : 1, stepY = isChroma ? sm.vMax : 1;
+                        const bOffX = bDef.dx * 8, bOffY = bDef.dy * 8;
+
+                        for (let by = 0; by < 8; by++) {
+                            for (let bx = 0; bx < 8; bx++) {
+                                if (!isChroma) {
+                                    let px = xBase + bOffX + bx, py = yBase + bOffY + by;
+                                    if (px >= w) px = w - 1; if (py >= h) py = h - 1;
+                                    const idx = (py * w + px) * 4;
+                                    const R = d[idx], G = d[idx + 1], B = d[idx + 2];
+                                    blkData[by * 8 + bx] = 0.299 * R + 0.587 * G + 0.114 * B - 128;
+                                } else if (sm.hMax === 2 && sm.vMax === 2) {
+                                    let px0 = xBase + bx * 2, px1 = px0 + 1, py0 = yBase + by * 2, py1 = py0 + 1;
+                                    if (px0 >= w) px0 = w - 1; if (px1 >= w) px1 = w - 1;
+                                    if (py0 >= h) py0 = h - 1; if (py1 >= h) py1 = h - 1;
+                                    const idx00 = (py0 * w + px0) * 4, idx01 = (py0 * w + px1) * 4;
+                                    const idx10 = (py1 * w + px0) * 4, idx11 = (py1 * w + px1) * 4;
+                                    const R = (d[idx00] + d[idx01] + d[idx10] + d[idx11]) * 0.25;
+                                    const G = (d[idx00 + 1] + d[idx01 + 1] + d[idx10 + 1] + d[idx11 + 1]) * 0.25;
+                                    const B = (d[idx00 + 2] + d[idx01 + 2] + d[idx10 + 2] + d[idx11 + 2]) * 0.25;
+                                    blkData[by * 8 + bx] = (bDef.c === 0) ? -0.1687 * R - 0.3313 * G + 0.5 * B : 0.5 * R - 0.4187 * G - 0.0813 * B;
+                                } else {
+                                    let sumR = 0, sumG = 0, sumB = 0, count = 0;
+                                    for (let sy = 0; sy < stepY; sy++) {
+                                        for (let sx = 0; sx < stepX; sx++) {
+                                            let px = xBase + bOffX * stepX + bx * stepX + sx, py = yBase + bOffY * stepY + by * stepY + sy;
+                                            if (px >= w) px = w - 1; if (py >= h) py = h - 1;
+                                            const idx = (py * w + px) * 4; sumR += d[idx]; sumG += d[idx + 1]; sumB += d[idx + 2]; count++;
+                                        }
+                                    }
+                                    const R = sumR / count, G = sumG / count, B = sumB / count;
+                                    blkData[by * 8 + bx] = (bDef.c === 0) ? -0.1687 * R - 0.3313 * G + 0.5 * B : 0.5 * R - 0.4187 * G - 0.0813 * B;
+                                }
+                            }
+                        }
+
+                        const comp = isChroma ? (bDef.c === 0 ? 1 : 2) : 0;
+                        pd[comp] = this.ems(this.fdctAan(blkData, scale, coeffData), pd[comp], comp === 0 ? this.hLD : this.hCD, comp === 0 ? this.hLA : this.hCA);
+                    }
+                }
+            }
+
+            if (this.cnt > 0) this.wbt(0x7F >>> (8 - this.cnt), 8 - this.cnt);
+            wr(0xFF00 | M.EOI);
+            return new Uint8Array(this.buf);
+        }
+
         ems(b, p, hd, ha) {
             const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
             const magLen = this.magLen, magBits = this.magBits, magOffset = this.magOffset;
@@ -1942,8 +2026,7 @@ const JpegCORE = {
 
             const imgData = new ImageData(rgba, width, height);
             const encoder = new JpegCORE.Encoder(q);
-            const captured = encoder.captureBlocks(imgData, mode);
-            const bytes = encoder.save(captured, null, true);
+            const bytes = encoder.encodeImageData(imgData, mode);
 
             return {
                 data: bytes,
