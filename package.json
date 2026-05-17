@@ -1,17 +1,25 @@
 {
   "name": "jpegcore",
   "version": "1.0.0",
-  "description": "Pure JavaScript JPEG encoder/decoder/transform library with improved progressive decoding",
+  "description": "High-performance JavaScript JPEG decoder/encoder with robust progressive decoding and jpeg-js compatible decode API",
+  "author": "David Block",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Streetblock/JPEGcore.git"
+  },
+  "homepage": "https://github.com/Streetblock/JPEGcore",
+  "bugs": {
+    "url": "https://github.com/Streetblock/JPEGcore/issues"
+  },
   "main": "JPEGcore.js",
   "exports": {
     ".": "./JPEGcore.js"
   },
   "files": [
     "JPEGcore.js",
-    "index.html",
-    "benchmarks",
-    "tests"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node tests/smoke.test.js"
