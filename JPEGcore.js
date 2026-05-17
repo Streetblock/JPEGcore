@@ -1231,6 +1231,108 @@ const JpegCORE = {
 
             let bIdx = 0;
 
+            if (mode === '420' && blockSize === 8) {
+                for (let r = 0; r < rows; r++) {
+                    const rowBase = r * mcuH * w * 4;
+
+                    for (let c = 0; c < cols; c++) {
+                        for (let b = 0; b < 6; b++) {
+                             if (bIdx >= blockList.length) break;
+                             const meta = blockList[bIdx];
+                             const qt = compQT[meta.comp] || compQT[0];
+                             if (isFlatBuffer) {
+                                 idct.transform(buffer, bIdx * 64, qt, 8, mcuPix, b * 64);
+                             } else {
+                                 idct.transform(meta.data, 0, qt, 8, mcuPix, b * 64);
+                             }
+                             bIdx++;
+                        }
+
+                        const ox = c * 16;
+                        const oy = r * 16;
+                        const maxY = Math.min(16, h - oy);
+                        const maxX = Math.min(16, w - ox);
+                        const leftX = Math.min(maxX, 8);
+
+                        for (let y = 0; y < maxY; y++) {
+                            let ptr = rowBase + (y * w * 4) + (ox * 4);
+                            const yBlockBase = y < 8 ? 0 : 128;
+                            const yRow = (y & 7) * 8;
+                            const cRow = (y >> 1) * 8;
+
+                            let x = 0;
+                            const leftBase = yBlockBase + yRow;
+                            for (; x + 1 < leftX; x += 2) {
+                                const cIdx = cRow + (x >> 1);
+                                const Cb = mcuPix[256 + cIdx] - 128;
+                                const Cr = mcuPix[320 + cIdx] - 128;
+                                const rAdd = 1.402 * Cr;
+                                const gAdd = (-0.344136 * Cb) - (0.714136 * Cr);
+                                const bAdd = 1.772 * Cb;
+                                let Y = mcuPix[leftBase + x];
+                                finalData[ptr++] = Y + rAdd;
+                                finalData[ptr++] = Y + gAdd;
+                                finalData[ptr++] = Y + bAdd;
+                                finalData[ptr++] = 255;
+                                Y = mcuPix[leftBase + x + 1];
+                                finalData[ptr++] = Y + rAdd;
+                                finalData[ptr++] = Y + gAdd;
+                                finalData[ptr++] = Y + bAdd;
+                                finalData[ptr++] = 255;
+                            }
+                            if (x < leftX) {
+                                const cIdx = cRow + (x >> 1);
+                                const Cb = mcuPix[256 + cIdx] - 128;
+                                const Cr = mcuPix[320 + cIdx] - 128;
+                                const rAdd = 1.402 * Cr;
+                                const gAdd = (-0.344136 * Cb) - (0.714136 * Cr);
+                                const bAdd = 1.772 * Cb;
+                                const Y = mcuPix[leftBase + x];
+                                finalData[ptr++] = Y + rAdd;
+                                finalData[ptr++] = Y + gAdd;
+                                finalData[ptr++] = Y + bAdd;
+                                finalData[ptr++] = 255;
+                            }
+
+                            const rightBase = yBlockBase + 64 + yRow;
+                            for (x = 8; x + 1 < maxX; x += 2) {
+                                const cIdx = cRow + (x >> 1);
+                                const Cb = mcuPix[256 + cIdx] - 128;
+                                const Cr = mcuPix[320 + cIdx] - 128;
+                                const rAdd = 1.402 * Cr;
+                                const gAdd = (-0.344136 * Cb) - (0.714136 * Cr);
+                                const bAdd = 1.772 * Cb;
+                                let Y = mcuPix[rightBase + (x - 8)];
+                                finalData[ptr++] = Y + rAdd;
+                                finalData[ptr++] = Y + gAdd;
+                                finalData[ptr++] = Y + bAdd;
+                                finalData[ptr++] = 255;
+                                Y = mcuPix[rightBase + (x - 7)];
+                                finalData[ptr++] = Y + rAdd;
+                                finalData[ptr++] = Y + gAdd;
+                                finalData[ptr++] = Y + bAdd;
+                                finalData[ptr++] = 255;
+                            }
+                            if (x < maxX) {
+                                const cIdx = cRow + (x >> 1);
+                                const Cb = mcuPix[256 + cIdx] - 128;
+                                const Cr = mcuPix[320 + cIdx] - 128;
+                                const rAdd = 1.402 * Cr;
+                                const gAdd = (-0.344136 * Cb) - (0.714136 * Cr);
+                                const bAdd = 1.772 * Cb;
+                                const Y = mcuPix[rightBase + (x - 8)];
+                                finalData[ptr++] = Y + rAdd;
+                                finalData[ptr++] = Y + gAdd;
+                                finalData[ptr++] = Y + bAdd;
+                                finalData[ptr++] = 255;
+                            }
+                        }
+                    }
+                }
+
+                return new ImageData(finalData, w, h);
+            }
+
             // --- 3. Main Loop ---
             for (let r = 0; r < rows; r++) {
                 const rowBase = r * mcuH * w * 4;
