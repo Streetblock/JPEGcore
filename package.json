@@ -18,11 +18,14 @@
   },
   "files": [
     "JPEGcore.js",
+    "src",
+    "scripts",
     "README.md",
     "CHANGELOG.md"
   ],
   "scripts": {
     "build": "node scripts/build-core.js",
+    "pretest": "npm run build",
     "test": "node tests/smoke.test.js"
   }
 }

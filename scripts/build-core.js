@@ -2,27 +2,27 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const src = path.join(root, "src");
+const manifestPath = path.join(__dirname, "core-build-manifest.json");
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const src = path.join(root, manifest.srcDir);
+const parts = manifest.parts;
 
-const parts = [
-  "header.js",
-  "core.js",
-  "constants.js",
-  "utils.js",
-  "analysis.js",
-  "decoder.js",
-  "transformer.js",
-  "glitch.js",
-  "encoder.js",
-  "jpeg-js-compat.js",
-  "footer.js"
-];
+for (const part of parts) {
+  const fullPath = path.join(src, part);
+  if (!fs.existsSync(fullPath)) {
+    throw new Error(`Missing source fragment: ${path.relative(root, fullPath)}`);
+  }
+}
 
-const header = fs.readFileSync(path.join(src, "header.js"), "utf8");
+if (parts[0] !== "header.js" || parts[parts.length - 1] !== "footer.js") {
+  throw new Error("Build manifest must start with header.js and end with footer.js");
+}
+
+const header = fs.readFileSync(path.join(src, parts[0]), "utf8");
 const body = parts
   .slice(1, -1)
   .map((file) => fs.readFileSync(path.join(src, file), "utf8"))
   .join("");
-const footer = fs.readFileSync(path.join(src, "footer.js"), "utf8");
+const footer = fs.readFileSync(path.join(src, parts[parts.length - 1]), "utf8");
 
-fs.writeFileSync(path.join(root, "JPEGcore.js"), `${header}const JpegCORE = {\n${body}${footer}`);
+fs.writeFileSync(path.join(root, manifest.output), `${header}const JpegCORE = {\n${body}${footer}`);

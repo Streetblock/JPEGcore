@@ -1,0 +1,17 @@
+{
+  "output": "JPEGcore.js",
+  "srcDir": "src",
+  "parts": [
+    "header.js",
+    "core.js",
+    "constants.js",
+    "utils.js",
+    "analysis.js",
+    "decoder.js",
+    "transformer.js",
+    "glitch.js",
+    "encoder.js",
+    "jpeg-js-compat.js",
+    "footer.js"
+  ]
+}
