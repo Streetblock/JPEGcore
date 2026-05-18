@@ -56,6 +56,12 @@ In a local benchmark with 8 images, 30 rounds and 3 warmups,
 
 ## Development
 
+Build the bundled library from the modular source fragments:
+
+```bash
+npm run build
+```
+
 Run smoke test:
 
 ```bash
@@ -71,6 +77,8 @@ node dev/dev-compare.js
 ## Project Structure
 
 - `JPEGcore.js`: main library
+- `src/`: modular source fragments used to build `JPEGcore.js`
+- `scripts/`: build tooling
 - `benchmarks/`: benchmark HTML and helpers
 - `tests/`: automated smoke test
 - `dev/`: local debug/compare tooling (for development)
