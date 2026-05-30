@@ -82,7 +82,11 @@ async function main() {
     }
   }
 
-  const grayDecoded = await JpegCORE.JpegJsCompat.decode(readFixture("synthetic-gray-8x8.jpg"), {
+  const grayBytes = readFixture("synthetic-gray-8x8.jpg");
+  const grayProbe = await JpegCORE.Analysis.probe(new TestBlob([grayBytes]));
+  assert.equal(grayProbe.detectedMode, "GRAY", "synthetic-gray-8x8.jpg should probe as GRAY");
+
+  const grayDecoded = await JpegCORE.JpegJsCompat.decode(grayBytes, {
     useTArray: true,
     formatAsRGBA: true
   });

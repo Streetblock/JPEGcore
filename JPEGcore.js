@@ -338,9 +338,13 @@ const JpegCORE = {
                         if (type >= M.SOF0 && type <= M.COM) {
                             const len = (d[pos + 2] << 8) | d[pos + 3];
                             const fullSegment = d.slice(pos, pos + 2 + len);
-                            if (type === M.SOF0) {
+                            if (type === M.SOF0 || type === M.SOF2) {
+                                const numComps = d[pos + 9];
                                 const ySamp = d[pos + 11];
-                                if (ySamp === 0x22) detectedSamp = '420'; else if (ySamp === 0x21) detectedSamp = '422'; else if (ySamp === 0x11) detectedSamp = '444';
+                                if (numComps === 1) detectedSamp = 'GRAY';
+                                else if (ySamp === 0x22) detectedSamp = '420';
+                                else if (ySamp === 0x21) detectedSamp = '422';
+                                else if (ySamp === 0x11) detectedSamp = '444';
                                 infoStr += `[Fmt:${detectedSamp}] `;
                             } else if (type === M.DQT) {
                                 let subPos = pos + 4, end = pos + 2 + len;
