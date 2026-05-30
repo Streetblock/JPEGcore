@@ -1,46 +1,9 @@
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const path = require("node:path");
-const vm = require("node:vm");
+const { loadCore } = require("./helpers/load-core");
 
 const repoRoot = path.resolve(__dirname, "..");
-const sourcePath = path.join(repoRoot, "JPEGcore.js");
-const source = fs.readFileSync(sourcePath, "utf8");
-
-const context = {
-  console,
-  setTimeout,
-  clearTimeout,
-  Uint8Array,
-  Uint8ClampedArray,
-  Int16Array,
-  Int32Array,
-  Float32Array,
-  Float64Array,
-  ArrayBuffer,
-  DataView,
-  Blob: class Blob {},
-  FileReader: class FileReader {},
-  ImageData: class ImageData {
-    constructor(dataOrWidth, width, height) {
-      if (typeof dataOrWidth === "number") {
-        this.width = dataOrWidth;
-        this.height = width;
-        this.data = new Uint8ClampedArray(this.width * this.height * 4);
-      } else {
-        this.data = dataOrWidth;
-        this.width = width;
-        this.height = height;
-      }
-    }
-  },
-  atob: (b64) => Buffer.from(b64, "base64").toString("binary"),
-  btoa: (str) => Buffer.from(str, "binary").toString("base64")
-};
-
-vm.createContext(context);
-vm.runInContext(source, context, { filename: "JPEGcore.js" });
-const JpegCORE = vm.runInContext("JpegCORE", context);
+const { JpegCORE } = loadCore(repoRoot);
 
 assert.ok(JpegCORE, "JpegCORE must be defined");
 assert.equal(typeof JpegCORE, "object");
