@@ -1231,6 +1231,44 @@ const JpegCORE = {
 
             let bIdx = 0;
 
+            if (mode === 'GRAY') {
+                const qt = compQT[0] || new Uint8Array(JpegCORE.Constants.QUANT_L);
+                for (let r = 0; r < rows; r++) {
+                    const rowBase = r * mcuH * w * 4;
+
+                    for (let c = 0; c < cols; c++) {
+                        if (bIdx >= blockList.length) break;
+                        const meta = blockList[bIdx];
+                        const blockQt = compQT[meta.comp] || qt;
+                        if (isFlatBuffer) {
+                            idct.transform(buffer, bIdx * 64, blockQt, blockSize, mcuPix, 0);
+                        } else {
+                            idct.transform(meta.data, 0, blockQt, blockSize, mcuPix, 0);
+                        }
+                        bIdx++;
+
+                        const ox = c * mcuW;
+                        const oy = r * mcuH;
+                        const maxY = Math.min(mcuH, h - oy);
+                        const maxX = Math.min(mcuW, w - ox);
+
+                        for (let y = 0; y < maxY; y++) {
+                            let ptr = rowBase + (y * w * 4) + (ox * 4);
+                            const srcRow = y * blockSize;
+                            for (let x = 0; x < maxX; x++) {
+                                const Y = mcuPix[srcRow + x];
+                                finalData[ptr++] = Y;
+                                finalData[ptr++] = Y;
+                                finalData[ptr++] = Y;
+                                finalData[ptr++] = 255;
+                            }
+                        }
+                    }
+                }
+
+                return new ImageData(finalData, w, h);
+            }
+
             if (mode === '420' && blockSize === 8) {
                 for (let r = 0; r < rows; r++) {
                     const rowBase = r * mcuH * w * 4;
