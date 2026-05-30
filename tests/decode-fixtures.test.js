@@ -26,6 +26,18 @@ function assertDecodedImage(decoded, width, height) {
   assert.ok(max > min, "decoded image should contain non-uniform RGB data");
 }
 
+function assertGrayImage(decoded, width, height) {
+  assert.equal(decoded.width, width);
+  assert.equal(decoded.height, height);
+  assert.equal(decoded.data.length, width * height * 4);
+
+  for (let i = 0; i < decoded.data.length; i += 4) {
+    assert.equal(decoded.data[i], decoded.data[i + 1], "GRAY decode must keep R and G equal");
+    assert.equal(decoded.data[i], decoded.data[i + 2], "GRAY decode must keep R and B equal");
+    assert.equal(decoded.data[i + 3], 255, "GRAY decode must write opaque alpha");
+  }
+}
+
 async function main() {
   const baselineFixtures = [
     "libjpeg-turbo-testorig.jpg",
@@ -43,6 +55,38 @@ async function main() {
     });
     assertDecodedImage(decoded, 227, 149);
   }
+
+  const syntheticFixtures = [
+    ["synthetic-444-8x8.jpg", "444", 8, 8],
+    ["synthetic-422-17x9.jpg", "422", 17, 9],
+    ["synthetic-420-17x15.jpg", "420", 17, 15],
+    ["synthetic-420-1x1.jpg", "420", 1, 1]
+  ];
+
+  for (const [fixture, mode, width, height] of syntheticFixtures) {
+    const bytes = readFixture(fixture);
+    const probe = await JpegCORE.Analysis.probe(new TestBlob([bytes]));
+    assert.equal(probe.detectedMode, mode, `${fixture} should probe as ${mode}`);
+
+    const decoded = await JpegCORE.JpegJsCompat.decode(bytes, {
+      useTArray: true,
+      formatAsRGBA: true
+    });
+    if (width * height === 1) {
+      assert.equal(decoded.width, width);
+      assert.equal(decoded.height, height);
+      assert.equal(decoded.data.length, width * height * 4);
+      assert.equal(decoded.data[3], 255);
+    } else {
+      assertDecodedImage(decoded, width, height);
+    }
+  }
+
+  const grayDecoded = await JpegCORE.JpegJsCompat.decode(readFixture("synthetic-gray-8x8.jpg"), {
+    useTArray: true,
+    formatAsRGBA: true
+  });
+  assertGrayImage(grayDecoded, 8, 8);
 
   const arithmeticProbe = await JpegCORE.Analysis.probe(
     new TestBlob([readFixture("libjpeg-turbo-testimgari.jpg")])
