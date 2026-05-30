@@ -1135,6 +1135,20 @@ const JpegCORE = {
             // 1. Die neue, schnelle Funktion aufrufen
             const optimized = await this.extractBlocksStruct(file);
 
+            if (optimized.preDecodedData && !optimized.blockList) {
+                return {
+                    blocks: [],
+                    preDecodedData: optimized.preDecodedData,
+                    w: optimized.w,
+                    h: optimized.h,
+                    mode: optimized.mode,
+                    quantTables: optimized.quantTables || {},
+                    compMap: optimized.compMap || [],
+                    isProgressiveFallback: optimized.isProgressiveFallback,
+                    decodeBackend: optimized.decodeBackend
+                };
+            }
+
             // 2. Das "Flat Buffer" Array in einzelne Block-Objekte zerlegen (Legacy Format)
             const legacyBlocks = new Array(optimized.blockList.length);
 

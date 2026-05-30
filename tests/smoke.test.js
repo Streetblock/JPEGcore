@@ -77,4 +77,46 @@ for (let i = 0; i < grayImage.data.length; i += 4) {
   assert.equal(grayImage.data[i + 3], 255, "GRAY render must write opaque alpha");
 }
 
-console.log("JPEGcore smoke test passed.");
+async function runAsyncChecks() {
+  const originalExtractBlocksStruct = JpegCORE.Decoder.extractBlocksStruct;
+  const fallbackPixels = new Uint8ClampedArray([
+    1, 2, 3, 255,
+    4, 5, 6, 255,
+    7, 8, 9, 255,
+    10, 11, 12, 255
+  ]);
+
+  JpegCORE.Decoder.extractBlocksStruct = async () => ({
+    preDecodedData: fallbackPixels,
+    w: 2,
+    h: 2,
+    mode: "RGBA_NATIVE",
+    quantTables: {},
+    compMap: [],
+    isProgressiveFallback: true,
+    decodeBackend: "native"
+  });
+
+  try {
+    const legacyResult = await JpegCORE.Decoder.extractBlocks({});
+    assert.equal(legacyResult.blocks.length, 0, "native fallback should expose an empty legacy block list");
+    assert.equal(legacyResult.preDecodedData, fallbackPixels, "native fallback pixels should be preserved");
+    assert.equal(legacyResult.isProgressiveFallback, true);
+
+    const rendered = JpegCORE.Decoder.render(legacyResult, 1.0);
+    assert.equal(rendered.width, 2);
+    assert.equal(rendered.height, 2);
+    assert.deepEqual(Array.from(rendered.data), Array.from(fallbackPixels));
+  } finally {
+    JpegCORE.Decoder.extractBlocksStruct = originalExtractBlocksStruct;
+  }
+}
+
+runAsyncChecks()
+  .then(() => {
+    console.log("JPEGcore smoke test passed.");
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
