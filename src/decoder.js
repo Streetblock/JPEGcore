@@ -611,9 +611,8 @@
                                     const magClassPrev = prevMag === 0 ? 0 : (prevMag <= low ? 1 : (prevMag <= high ? 2 : 3));
 
                                     // Context 0: zero/non-zero decision
-                                    const zeroCtxIdx = (compCtx[0] + magClassPrev) & 0x3f;
                                     const zeroCtx = readPackedCtx(compCtx, 0, 0);
-                                    zeroCtx.idx = zeroCtxIdx;
+                                    zeroCtx.idx = ((zeroCtx.idx & 0x3f) + magClassPrev) & 0x3f;
                                     const nonZero = arithmeticDecoder.decodeBit(zeroCtx);
                                     writePackedCtx(compCtx, 0, zeroCtx);
                                     pushTrace({ phase: "dc_zero", comp: c.type, dcTbl: c.dcTbl, idx: zeroCtx.idx, mps: zeroCtx.mps, bit: nonZero, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
@@ -636,6 +635,7 @@
                                     const magClassCap = Math.max(0, high - low);
                                     while (magClass < magClassCap) {
                                         const classCtx = readPackedCtx(compCtx, magGrowSlot, 0);
+                                        classCtx.mps = 0;
                                         const inc = arithmeticDecoder.decodeBit(classCtx);
                                         writePackedCtx(compCtx, magGrowSlot, classCtx);
                                         pushTrace({ phase: "dc_mag_inc", comp: c.type, dcTbl: c.dcTbl, idx: classCtx.idx, mps: classCtx.mps, bit: inc, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
@@ -644,8 +644,9 @@
                                         magClass++;
                                     }
 
-                                    // Lower-bound from L plus class expansion.
-                                    let magnitude = 1 + Math.max(0, cond.L) + magClass;
+                                    // Lower-bound from L-window plus class expansion.
+                                    // Keep stage monotonic while avoiding oversized base jumps.
+                                    let magnitude = 1 + Math.max(0, low) + magClass;
                                     let extraBits = magClass;
                                     const magBitSlot = 6 + Math.min(magClassPrev, 1);
                                     while (extraBits-- > 0) {
