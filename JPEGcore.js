@@ -316,28 +316,47 @@ const JpegCORE = {
                 return 0;
             }
 
+            _renorm() {
+                while (this.a < 0x8000) {
+                    const inBit = this.reader.nextBit();
+                    if (inBit === null || inBit < 0) return inBit;
+                    this.a <<= 1;
+                    this.c = ((this.c << 1) | inBit) & 0x1ffff;
+                }
+                return 0;
+            }
+
             // Temporary placeholder until full QM-state machine is wired.
             decodeBypassBit() {
                 return this.reader.nextBit();
             }
 
             // API-compatible context decode hook.
-            // Current stage uses bypass bit sampling while already applying
-            // context-state transitions (nmps/nlps/switchMps).
+            // Stage 2: register-based A/C update + renormalization.
             decodeBit(contextState) {
                 if (!contextState) contextState = this.createContextState(0, 0);
+                if (!this.initialized) {
+                    const st = this.initialize();
+                    if (st === null || st < 0) return st;
+                }
                 const qe = this.getQeEntry(contextState.idx | 0);
-                const rawBit = this.decodeBypassBit();
-                if (rawBit === null || rawBit < 0) return rawBit;
+                this.a -= qe.qe;
 
-                if (rawBit === contextState.mps) {
+                let decodedBit;
+                if ((this.c & 0xffff) < this.a) {
+                    decodedBit = contextState.mps;
                     contextState.idx = qe.nmps;
-                    return contextState.mps;
+                } else {
+                    this.c = (this.c - this.a) & 0x1ffff;
+                    this.a = qe.qe;
+                    if (qe.switchMps) contextState.mps ^= 1;
+                    contextState.idx = qe.nlps;
+                    decodedBit = contextState.mps ^ 1;
                 }
 
-                if (qe.switchMps) contextState.mps ^= 1;
-                contextState.idx = qe.nlps;
-                return contextState.mps ^ 1;
+                const renormStatus = this._renorm();
+                if (renormStatus === null || renormStatus < 0) return renormStatus;
+                return decodedBit;
             }
         }
     },
