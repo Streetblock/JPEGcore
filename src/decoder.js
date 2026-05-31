@@ -178,6 +178,7 @@
                 // Wir nutzen die neuen Utility-Funktionen
                 const utils = JpegCORE.Utils;
                 const makeTree = utils.makeHuffmanTree;
+                const ArithmeticDecoder = utils.ArithmeticDecoder;
 
                 // STATUS CODES
                 const STAT_MARKER = -1;
@@ -515,7 +516,15 @@
                                 const arithmeticState = buildArithmeticScanState(comps);
                                 const dcStateTables = Object.keys(arithmeticState.dcStatsByTable).length;
                                 const acStateTables = Object.keys(arithmeticState.acStatsByTable).length;
-                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, restartIntervalMCUs=${restartIntervalMCUs}).`);
+                                const arithmeticDecoder = new ArithmeticDecoder(reader);
+                                const initStatus = arithmeticDecoder.initialize();
+                                if (initStatus === STAT_MARKER || initStatus === STAT_RST || initStatus === null) {
+                                    throw new Error(`Arithmetic JPEG init failed (status=${initStatus}).`);
+                                }
+                                if (!arithmeticDecoder.initialized) {
+                                    throw new Error("Arithmetic JPEG init failed (decoder not initialized).");
+                                }
+                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, restartIntervalMCUs=${restartIntervalMCUs}, init=ok).`);
                             }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen

@@ -215,6 +215,48 @@ const JpegCORE = {
                 this.bitCount = 0;
                 this.bitBuffer = 0;
             }
+        },
+
+        // --- 3. ARITHMETIC DECODER (JPEG T.81 groundwork) ---
+        // This is the shared stateful arithmetic core used by SOF9 decoding paths.
+        // The full coefficient decode wiring is implemented incrementally in decoder.js.
+        ArithmeticDecoder: class {
+            constructor(bitReader) {
+                this.reader = bitReader;
+                this.c = 0;
+                this.a = 0x10000;
+                this.ct = 0;
+                this.initialized = false;
+            }
+
+            _readByte() {
+                let b = this.reader.nextBit();
+                if (b === null || b < 0) return b;
+                let v = b;
+                for (let i = 0; i < 7; i++) {
+                    b = this.reader.nextBit();
+                    if (b === null || b < 0) return b;
+                    v = (v << 1) | b;
+                }
+                return v;
+            }
+
+            initialize() {
+                const b1 = this._readByte();
+                if (b1 === null || b1 < 0) return b1;
+                const b2 = this._readByte();
+                if (b2 === null || b2 < 0) return b2;
+                this.c = (b1 << 8) | b2;
+                this.a = 0x10000;
+                this.ct = 0;
+                this.initialized = true;
+                return 0;
+            }
+
+            // Temporary placeholder until full QM-state machine is wired.
+            decodeBypassBit() {
+                return this.reader.nextBit();
+            }
         }
     },
 
@@ -635,6 +677,7 @@ const JpegCORE = {
                 // Wir nutzen die neuen Utility-Funktionen
                 const utils = JpegCORE.Utils;
                 const makeTree = utils.makeHuffmanTree;
+                const ArithmeticDecoder = utils.ArithmeticDecoder;
 
                 // STATUS CODES
                 const STAT_MARKER = -1;
@@ -972,7 +1015,15 @@ const JpegCORE = {
                                 const arithmeticState = buildArithmeticScanState(comps);
                                 const dcStateTables = Object.keys(arithmeticState.dcStatsByTable).length;
                                 const acStateTables = Object.keys(arithmeticState.acStatsByTable).length;
-                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, restartIntervalMCUs=${restartIntervalMCUs}).`);
+                                const arithmeticDecoder = new ArithmeticDecoder(reader);
+                                const initStatus = arithmeticDecoder.initialize();
+                                if (initStatus === STAT_MARKER || initStatus === STAT_RST || initStatus === null) {
+                                    throw new Error(`Arithmetic JPEG init failed (status=${initStatus}).`);
+                                }
+                                if (!arithmeticDecoder.initialized) {
+                                    throw new Error("Arithmetic JPEG init failed (decoder not initialized).");
+                                }
+                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, restartIntervalMCUs=${restartIntervalMCUs}, init=ok).`);
                             }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
