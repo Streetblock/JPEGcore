@@ -16,9 +16,7 @@ const JpegCORE = {
     Config: {
         nativeProgressiveDecode: false,
         strictArithmeticDecode: false,
-        arithmeticTraceLimit: 4096,
-        arithmeticDcVariant: "C",
-        arithmeticAcVariant: "D"
+        arithmeticTraceLimit: 4096
     },
     // --- 1. CONSTANTS ---
     Constants: {
@@ -1274,7 +1272,7 @@ const JpegCORE = {
                                     const zeroCtx = readPackedCtx(compCtx, s0CtxIndex, 0);
                                     const nonZero = arithmeticDecoder.decodeBit(zeroCtx);
                                     writePackedCtx(compCtx, s0CtxIndex, zeroCtx);
-                                    pushTrace({ phase: "dc_zero", comp: c.type, dcTbl: c.dcTbl, idx: zeroCtx.idx, mps: zeroCtx.mps, bit: nonZero, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    pushTrace({ phase: "dc_zero", annex: "D.3", decision: "S0", comp: c.type, dcTbl: c.dcTbl, idx: zeroCtx.idx, mps: zeroCtx.mps, bit: nonZero, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                     if (nonZero === STAT_MARKER || nonZero === STAT_RST || nonZero === null) return nonZero;
                                     if (nonZero === 0) {
                                         compState.lastDcDiff = 0;
@@ -1287,7 +1285,7 @@ const JpegCORE = {
                                     const signCtx = readPackedCtx(compCtx, signCtxIndex, 0);
                                     const signBit = arithmeticDecoder.decodeBit(signCtx);
                                     writePackedCtx(compCtx, signCtxIndex, signCtx);
-                                    pushTrace({ phase: "dc_sign", comp: c.type, dcTbl: c.dcTbl, idx: signCtx.idx, mps: signCtx.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    pushTrace({ phase: "dc_sign", annex: "D.3", decision: "SS", comp: c.type, dcTbl: c.dcTbl, idx: signCtx.idx, mps: signCtx.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                     if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
 
                                     let magClass = 0;
@@ -1298,7 +1296,7 @@ const JpegCORE = {
                                         const magCtx = readPackedCtx(compCtx, magCtxIndex, 0);
                                         const bit = arithmeticDecoder.decodeBit(magCtx);
                                         writePackedCtx(compCtx, magCtxIndex, magCtx);
-                                        pushTrace({ phase: "dc_mag_inc", comp: c.type, dcTbl: c.dcTbl, idx: magCtx.idx, mps: magCtx.mps, bit, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        pushTrace({ phase: "dc_mag_inc", annex: "D.3", decision: "SP", comp: c.type, dcTbl: c.dcTbl, idx: magCtx.idx, mps: magCtx.mps, bit, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (bit === STAT_MARKER || bit === STAT_RST || bit === null) return bit;
                                         if (bit === 0) break;
                                         magClass++;
@@ -1320,7 +1318,7 @@ const JpegCORE = {
                                         const eobState = readPackedCtx(acCtx, eobCtxIndex, 0);
                                         const eobBit = arithmeticDecoder.decodeBit(eobState);
                                         writePackedCtx(acCtx, eobCtxIndex, eobState);
-                                        pushTrace({ phase: "ac_eob", comp: c.type, acTbl: c.acTbl, k, idx: eobState.idx, mps: eobState.mps, bit: eobBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        pushTrace({ phase: "ac_eob", annex: "D.6", decision: "EOB", comp: c.type, acTbl: c.acTbl, k, idx: eobState.idx, mps: eobState.mps, bit: eobBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (eobBit === STAT_MARKER || eobBit === STAT_RST || eobBit === null) return eobBit;
                                         if (eobBit === 1) break;
 
@@ -1328,7 +1326,7 @@ const JpegCORE = {
                                         const sigState = readPackedCtx(acCtx, sigCtxIndex, 0);
                                         const sigBit = arithmeticDecoder.decodeBit(sigState);
                                         writePackedCtx(acCtx, sigCtxIndex, sigState);
-                                        pushTrace({ phase: "ac_sig", comp: c.type, acTbl: c.acTbl, k, idx: sigState.idx, mps: sigState.mps, bit: sigBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        pushTrace({ phase: "ac_sig", annex: "D.6", decision: "SN", comp: c.type, acTbl: c.acTbl, k, idx: sigState.idx, mps: sigState.mps, bit: sigBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (sigBit === STAT_MARKER || sigBit === STAT_RST || sigBit === null) return sigBit;
                                         if (sigBit === 0) {
                                             k++;
@@ -1339,7 +1337,7 @@ const JpegCORE = {
                                         const signState = readPackedCtx(acCtx, signCtxIndex, 0);
                                         const signBit = arithmeticDecoder.decodeBit(signState);
                                         writePackedCtx(acCtx, signCtxIndex, signState);
-                                        pushTrace({ phase: "ac_sign", comp: c.type, acTbl: c.acTbl, k, idx: signState.idx, mps: signState.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        pushTrace({ phase: "ac_sign", annex: "D.6", decision: "S", comp: c.type, acTbl: c.acTbl, k, idx: signState.idx, mps: signState.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
 
                                         let magClass = 0;
@@ -1349,7 +1347,7 @@ const JpegCORE = {
                                             const magState = readPackedCtx(acCtx, magCtxIndex, 0);
                                             const bit = arithmeticDecoder.decodeBit(magState);
                                             writePackedCtx(acCtx, magCtxIndex, magState);
-                                            pushTrace({ phase: "ac_mag_inc", comp: c.type, acTbl: c.acTbl, k, idx: magState.idx, mps: magState.mps, bit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            pushTrace({ phase: "ac_mag_inc", annex: "D.6", decision: "X", comp: c.type, acTbl: c.acTbl, k, idx: magState.idx, mps: magState.mps, bit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                             if (bit === STAT_MARKER || bit === STAT_RST || bit === null) return bit;
                                             if (bit === 0) break;
                                             magClass++;
