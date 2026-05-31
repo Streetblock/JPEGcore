@@ -30,6 +30,8 @@ async function main() {
   const probe = await JpegCORE.Analysis.probe(new TestBlob([bytes]));
   assert.equal(probe.detectedMode, "420");
   assert.equal(probe.detectedArithmetic, true);
+  assert.ok(Object.keys(probe.arithmeticDcTables || {}).length > 0, "probe should parse DAC DC tables");
+  assert.ok(Object.keys(probe.arithmeticAcTables || {}).length > 0, "probe should parse DAC AC tables");
 
   // Current baseline expectation for this branch:
   // arithmetic-coded JPEG is not decoded yet and should fail cleanly.

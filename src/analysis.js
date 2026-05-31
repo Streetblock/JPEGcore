@@ -107,6 +107,8 @@
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
                 let infoStr = "", detectedSamp = '420', detectedProgressive = false, detectedArithmetic = false;
+                const arithmeticDcTables = {};
+                const arithmeticAcTables = {};
                 let detectedOrientation = null;
                 const rawHuff = { 0: {}, 1: {} };
 
@@ -151,6 +153,24 @@
                                     if (rawHuff[tc]) rawHuff[tc][th] = { n: nr, v: val };
                                 }
                             } else if (type === M.DAC) {
+                                let subPos = pos + 4, end = pos + 2 + len;
+                                while (subPos + 1 < end) {
+                                    const tcTb = d[subPos++];
+                                    const cond = d[subPos++];
+                                    const tc = (tcTb >> 4) & 0x0F;
+                                    const tb = tcTb & 0x0F;
+                                    if (tb > 3) continue;
+                                    if (tc === 0) {
+                                        arithmeticDcTables[tb] = {
+                                            L: (cond >> 4) & 0x0F,
+                                            U: cond & 0x0F
+                                        };
+                                    } else if (tc === 1) {
+                                        arithmeticAcTables[tb] = {
+                                            Kx: cond & 0x1F
+                                        };
+                                    }
+                                }
                                 detectedArithmetic = true;
                             } else if ((type >= M.APP0 && type <= 0xEF) || type === M.COM) {
                                 meta.push(fullSegment);
@@ -183,6 +203,8 @@
                     detectedMode: detectedSamp,
                     detectedProgressive: detectedProgressive,
                     detectedArithmetic: detectedArithmetic,
+                    arithmeticDcTables: arithmeticDcTables,
+                    arithmeticAcTables: arithmeticAcTables,
                     detectedHuffman: foundCustom ? extractedHuff : null,
                     detectedMetaSegments: meta,
                     detectedOrientation: detectedOrientation,
