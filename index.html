@@ -248,11 +248,11 @@
                 const imgData = JpegCORE.Decoder.render(this.state.decoded, this.state.currentScale);
                 const t1 = performance.now();
 
-                const cvs = this.elements.canvas;
-                cvs.width = imgData.width;
-                cvs.height = imgData.height;
-                const ctx = cvs.getContext('2d');
-                ctx.putImageData(imgData, 0, 0);
+                drawImageDataWithOrientation(
+                    this.elements.canvas,
+                    imgData,
+                    this.state.meta ? this.state.meta.detectedOrientation : 1
+                );
 
                 this.elements.status.innerText = `Render: ${Math.round(t1-t0)}ms @ ${(this.state.currentScale*100)}%`;
             } catch (e) {
@@ -291,6 +291,54 @@
             URL.revokeObjectURL(url);
         }
     };
+
+    function drawImageDataWithOrientation(canvas, imgData, orientation = 1) {
+        const normalized = Number(orientation) || 1;
+        const swapsAxes = normalized >= 5 && normalized <= 8;
+        canvas.width = swapsAxes ? imgData.height : imgData.width;
+        canvas.height = swapsAxes ? imgData.width : imgData.height;
+
+        const scratch = document.createElement('canvas');
+        scratch.width = imgData.width;
+        scratch.height = imgData.height;
+        scratch.getContext('2d').putImageData(imgData, 0, 0);
+
+        const ctx = canvas.getContext('2d');
+        ctx.save();
+        switch (normalized) {
+            case 2:
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+                break;
+            case 3:
+                ctx.translate(canvas.width, canvas.height);
+                ctx.rotate(Math.PI);
+                break;
+            case 4:
+                ctx.translate(0, canvas.height);
+                ctx.scale(1, -1);
+                break;
+            case 5:
+                ctx.rotate(0.5 * Math.PI);
+                ctx.scale(1, -1);
+                break;
+            case 6:
+                ctx.translate(canvas.width, 0);
+                ctx.rotate(0.5 * Math.PI);
+                break;
+            case 7:
+                ctx.translate(canvas.width, canvas.height);
+                ctx.rotate(0.5 * Math.PI);
+                ctx.scale(-1, 1);
+                break;
+            case 8:
+                ctx.translate(0, canvas.height);
+                ctx.rotate(-0.5 * Math.PI);
+                break;
+        }
+        ctx.drawImage(scratch, 0, 0);
+        ctx.restore();
+    }
 
     App.init();
     </script>
