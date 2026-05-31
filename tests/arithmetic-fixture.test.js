@@ -67,6 +67,7 @@ async function main() {
       assert.match(msg, /step=\d+/i);
       assert.match(msg, /phase=/i);
       assert.match(msg, /trace=\[/i);
+      assert.match(msg, /focus=\[/i);
       throw err;
     }
     throw new Error("strict mode should reject arithmetic staged decode");

@@ -1162,6 +1162,18 @@ const JpegCORE = {
                                     return `#${i + 1} ${e.phase} comp=${e.comp}${tbl}${k}${run} ctx=(${e.idx},${e.mps}) bit=${e.bit} A=${e.a} C=${e.c}`;
                                 };
                                 const compactTrace = (limit = 6) => arithmeticTrace.slice(0, limit).map(formatTraceLine).join(" | ");
+                                const traceWindow = (centerStep, radius = 3) => {
+                                    if (!arithmeticTrace.length) return "";
+                                    const centerIdx = Math.max(0, Math.min(arithmeticTrace.length - 1, (centerStep | 0) - 1));
+                                    const start = Math.max(0, centerIdx - radius);
+                                    const end = Math.min(arithmeticTrace.length, centerIdx + radius + 1);
+                                    const lines = [];
+                                    for (let i = start; i < end; i++) {
+                                        const prefix = (i === centerIdx) ? ">>" : "  ";
+                                        lines.push(`${prefix}${formatTraceLine(arithmeticTrace[i], i)}`);
+                                    }
+                                    return lines.join(" ; ");
+                                };
                                 reader.pos = sosEnd;
                                 const arithmeticDecoder = new ArithmeticDecoder(reader);
                                 const initStatus = arithmeticDecoder.initialize();
@@ -1432,7 +1444,8 @@ const JpegCORE = {
                                         ? ` step=${arithmeticTrace.length} phase=${last.phase} comp=${last.comp}${(typeof last.k === "number") ? ` k=${last.k}` : ""}${(typeof last.run === "number") ? ` run=${last.run}` : ""}`
                                         : ` step=0`;
                                     const preview = arithmeticTrace.length ? ` trace=[${compactTrace(6)}]` : "";
-                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (${where}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).${preview}`);
+                                    const focus = arithmeticTrace.length ? ` focus=[${traceWindow(arithmeticTrace.length, 4)}]` : "";
+                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (${where}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).${preview}${focus}`);
                                 }
                                 // Arithmetic staged path completed for this scan.
                                 // Keep marker parser aligned for potential following segments/scans.
