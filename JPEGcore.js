@@ -17,7 +17,7 @@ const JpegCORE = {
         nativeProgressiveDecode: false,
         strictArithmeticDecode: true,
         arithmeticTraceLimit: 128,
-        arithmeticDcVariant: "A"
+        arithmeticDcVariant: "C"
     },
     // --- 1. CONSTANTS ---
     Constants: {
@@ -1239,6 +1239,7 @@ const JpegCORE = {
                                     const compCtx = arithmeticState.dcMagnitudeContextByType[c.type];
                                     const compState = arithmeticState.compStateByType[c.type];
                                     const cond = arithmeticState.dcConditioningByTable[c.dcTbl];
+                                    const dcVariant = String(JpegCORE.Config.arithmeticDcVariant || "A").toUpperCase();
                                     const prevMag = Math.abs(compState.lastDcDiff | 0);
                                     const low = Math.max(0, cond.L | 0);
                                     const high = Math.max(low, cond.U | 0);
@@ -1257,7 +1258,10 @@ const JpegCORE = {
                                     }
 
                                     // Context 1: sign
-                                    const signCtx = readPackedCtx(compCtx, 1, (compState.lastDcDiff < 0) ? 1 : 0);
+                                    const signSeedMps = (dcVariant === "B")
+                                        ? (((compState.lastDcDiff < 0) || magClassPrev >= 2) ? 1 : 0)
+                                        : ((compState.lastDcDiff < 0) ? 1 : 0);
+                                    const signCtx = readPackedCtx(compCtx, 1, signSeedMps);
                                     const signBit = arithmeticDecoder.decodeBit(signCtx);
                                     writePackedCtx(compCtx, 1, signCtx);
                                     pushTrace({ phase: "dc_sign", comp: c.type, dcTbl: c.dcTbl, idx: signCtx.idx, mps: signCtx.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
@@ -1267,10 +1271,11 @@ const JpegCORE = {
                                     const magGrowSlot = 2 + Math.min(magClassPrev, 3);
                                     let magClass = 0;
                                     const magClassCap = Math.max(0, high - low);
-                                    const dcVariant = String(JpegCORE.Config.arithmeticDcVariant || "A").toUpperCase();
                                     const magIncSeedMps = (dcVariant === "B")
                                         ? ((prevMag > high) ? 1 : 0)
-                                        : 0;
+                                        : ((dcVariant === "C")
+                                            ? (signBit ? 1 : 0)
+                                            : 0);
                                     while (magClass < magClassCap) {
                                         const classCtx = readPackedCtx(compCtx, magGrowSlot, magIncSeedMps);
                                         const inc = arithmeticDecoder.decodeBit(classCtx);
