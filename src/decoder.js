@@ -682,6 +682,18 @@
                                     for (const compType of Object.keys(arithmeticState.compStateByType)) {
                                         arithmeticState.compStateByType[compType].lastDcDiff = 0;
                                     }
+                                    for (const tbl of Object.keys(arithmeticState.dcStatsByTable)) {
+                                        arithmeticState.dcStatsByTable[tbl].fill(0);
+                                    }
+                                    for (const tbl of Object.keys(arithmeticState.acStatsByTable)) {
+                                        arithmeticState.acStatsByTable[tbl].fill(0);
+                                    }
+                                    for (const compType of Object.keys(arithmeticState.dcMagnitudeContextByType)) {
+                                        arithmeticState.dcMagnitudeContextByType[compType].fill(0);
+                                    }
+                                    for (const compType of Object.keys(arithmeticState.acBandContextByType)) {
+                                        arithmeticState.acBandContextByType[compType].fill(0);
+                                    }
                                 };
                                 outerArithmeticLoop:
                                 for (let m = 0; m < cols * rows; m++) {
