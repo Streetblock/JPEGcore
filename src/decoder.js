@@ -553,6 +553,13 @@
                                     if (arithmeticTrace.length >= traceLimit) return;
                                     arithmeticTrace.push(entry);
                                 };
+                                const formatTraceLine = (e, i) => {
+                                    const k = (typeof e.k === "number") ? ` k=${e.k}` : "";
+                                    const run = (typeof e.run === "number") ? ` run=${e.run}` : "";
+                                    const tbl = (typeof e.dcTbl === "number") ? ` dcTbl=${e.dcTbl}` : ((typeof e.acTbl === "number") ? ` acTbl=${e.acTbl}` : "");
+                                    return `#${i + 1} ${e.phase} comp=${e.comp}${tbl}${k}${run} ctx=(${e.idx},${e.mps}) bit=${e.bit} A=${e.a} C=${e.c}`;
+                                };
+                                const compactTrace = (limit = 6) => arithmeticTrace.slice(0, limit).map(formatTraceLine).join(" | ");
                                 reader.pos = sosEnd;
                                 const arithmeticDecoder = new ArithmeticDecoder(reader);
                                 const initStatus = arithmeticDecoder.initialize();
@@ -784,8 +791,12 @@
                                     throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
                                 }
                                 if (JpegCORE.Config.strictArithmeticDecode) {
-                                    const traceMsg = arithmeticTrace.length ? ` trace=${JSON.stringify(arithmeticTrace.slice(0, 8))}` : "";
-                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).${traceMsg}`);
+                                    const last = arithmeticTrace.length ? arithmeticTrace[arithmeticTrace.length - 1] : null;
+                                    const where = last
+                                        ? ` step=${arithmeticTrace.length} phase=${last.phase} comp=${last.comp}${(typeof last.k === "number") ? ` k=${last.k}` : ""}${(typeof last.run === "number") ? ` run=${last.run}` : ""}`
+                                        : ` step=0`;
+                                    const preview = arithmeticTrace.length ? ` trace=[${compactTrace(6)}]` : "";
+                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (${where}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).${preview}`);
                                 }
                                 // Arithmetic staged path completed for this scan.
                                 // Keep marker parser aligned for potential following segments/scans.
