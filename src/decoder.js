@@ -644,7 +644,7 @@
 
                                     v += 1;
                                     if (sign) v = -v;
-                                    compState.lastDcVal = (compState.lastDcVal + v) | 0;
+                                    compState.lastDcVal = ((compState.lastDcVal + v) & 0xffff) | 0;
                                     return v;
                                 };
 
@@ -783,8 +783,8 @@
                                                 arithmeticStopStatus = diff;
                                                 break outerArithmeticLoop;
                                             }
-                                            predDC[c.type] += diff;
-                                            coeff[blockOffset] = predDC[c.type] << Al;
+                                            const compState = arithmeticState.compStateByType[c.type];
+                                            coeff[blockOffset] = (compState.lastDcVal | 0) << Al;
                                             dcBlocksDecoded++;
 
                                             const acStatus = decodeArithmeticAcBlock(blockOffset, c);
