@@ -21,7 +21,7 @@ const JpegCORE = {
       MARKERS: {
           SOI: 0xD8, EOI: 0xD9, SOF0: 0xC0, SOF2: 0xC2, SOF9: 0xC9, DHT: 0xC4,
           DAC: 0xCC,
-          DQT: 0xDB, SOS: 0xDA, APP0: 0xE0, APP1: 0xE1, COM: 0xFE, RST0: 0xD0, RST7: 0xD7
+          DQT: 0xDB, DRI: 0xDD, SOS: 0xDA, APP0: 0xE0, APP1: 0xE1, COM: 0xFE, RST0: 0xD0, RST7: 0xD7
       },
       ZIG_ZAG: new Int32Array([0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]),
 
@@ -328,6 +328,7 @@ const JpegCORE = {
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
                 let infoStr = "", detectedSamp = '420', detectedProgressive = false, detectedArithmetic = false;
+                let restartIntervalMCUs = 0;
                 const arithmeticDcTables = {};
                 const arithmeticAcTables = {};
                 let detectedOrientation = null;
@@ -373,6 +374,8 @@ const JpegCORE = {
                                     const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
                                     if (rawHuff[tc]) rawHuff[tc][th] = { n: nr, v: val };
                                 }
+                            } else if (type === M.DRI) {
+                                restartIntervalMCUs = ((d[pos + 4] << 8) | d[pos + 5]) >>> 0;
                             } else if (type === M.DAC) {
                                 let subPos = pos + 4, end = pos + 2 + len;
                                 while (subPos + 1 < end) {
@@ -426,6 +429,7 @@ const JpegCORE = {
                     detectedMode: detectedSamp,
                     detectedProgressive: detectedProgressive,
                     detectedArithmetic: detectedArithmetic,
+                    restartIntervalMCUs: restartIntervalMCUs,
                     arithmeticDcTables: arithmeticDcTables,
                     arithmeticAcTables: arithmeticAcTables,
                     detectedHuffman: foundCustom ? extractedHuff : null,
@@ -735,6 +739,7 @@ const JpegCORE = {
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
                 let isProgressive = false;
                 let isArithmetic = false;
+                let restartIntervalMCUs = 0;
                 let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
 
@@ -819,6 +824,10 @@ const JpegCORE = {
                             const naturalTbl = new Uint8Array(64);
                             for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10;
                             quantTables[id] = naturalTbl;
+                        }
+                    } else if (marker === M.DRI) {
+                        if (pos + 5 < d.length) {
+                            restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
                         }
                     } else if (marker === M.DAC) {
                         parseDacSegment(pos + 3, segmentEnd);
@@ -1205,6 +1214,13 @@ const JpegCORE = {
                             if (pos + 1 + len > d.length) break;
                             parseDacSegment(pos + 3, pos + 1 + len);
                             pos += 1 + len;
+                        } else if (marker === M.DRI) {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            if (pos + 1 + len > d.length) break;
+                            if (len >= 4 && pos + 4 < d.length) {
+                                restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
+                            }
+                            pos += 1 + len;
                         } else if (marker === M.EOI) { break; }
                         else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
                     }
@@ -1215,7 +1231,7 @@ const JpegCORE = {
                     console.warn("Robust Decode Warning:", e);
                 }
 
-                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, decodeBackend: 'internal' };
+                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, restartIntervalMCUs, decodeBackend: 'internal' };
 
             } catch (globalErr) {
                 if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic JPEG")) {

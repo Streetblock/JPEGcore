@@ -282,6 +282,7 @@
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
                 let isProgressive = false;
                 let isArithmetic = false;
+                let restartIntervalMCUs = 0;
                 let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
 
@@ -366,6 +367,10 @@
                             const naturalTbl = new Uint8Array(64);
                             for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10;
                             quantTables[id] = naturalTbl;
+                        }
+                    } else if (marker === M.DRI) {
+                        if (pos + 5 < d.length) {
+                            restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
                         }
                     } else if (marker === M.DAC) {
                         parseDacSegment(pos + 3, segmentEnd);
@@ -752,6 +757,13 @@
                             if (pos + 1 + len > d.length) break;
                             parseDacSegment(pos + 3, pos + 1 + len);
                             pos += 1 + len;
+                        } else if (marker === M.DRI) {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            if (pos + 1 + len > d.length) break;
+                            if (len >= 4 && pos + 4 < d.length) {
+                                restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
+                            }
+                            pos += 1 + len;
                         } else if (marker === M.EOI) { break; }
                         else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
                     }
@@ -762,7 +774,7 @@
                     console.warn("Robust Decode Warning:", e);
                 }
 
-                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, decodeBackend: 'internal' };
+                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, restartIntervalMCUs, decodeBackend: 'internal' };
 
             } catch (globalErr) {
                 if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic JPEG")) {

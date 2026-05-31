@@ -30,6 +30,7 @@ async function main() {
   const probe = await JpegCORE.Analysis.probe(new TestBlob([bytes]));
   assert.equal(probe.detectedMode, "420");
   assert.equal(probe.detectedArithmetic, true);
+  assert.equal(typeof probe.restartIntervalMCUs, "number");
   assert.ok(Object.keys(probe.arithmeticDcTables || {}).length > 0, "probe should parse DAC DC tables");
   assert.ok(Object.keys(probe.arithmeticAcTables || {}).length > 0, "probe should parse DAC AC tables");
   for (const table of Object.values(probe.arithmeticDcTables || {})) {

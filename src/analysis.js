@@ -107,6 +107,7 @@
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
                 let infoStr = "", detectedSamp = '420', detectedProgressive = false, detectedArithmetic = false;
+                let restartIntervalMCUs = 0;
                 const arithmeticDcTables = {};
                 const arithmeticAcTables = {};
                 let detectedOrientation = null;
@@ -152,6 +153,8 @@
                                     const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
                                     if (rawHuff[tc]) rawHuff[tc][th] = { n: nr, v: val };
                                 }
+                            } else if (type === M.DRI) {
+                                restartIntervalMCUs = ((d[pos + 4] << 8) | d[pos + 5]) >>> 0;
                             } else if (type === M.DAC) {
                                 let subPos = pos + 4, end = pos + 2 + len;
                                 while (subPos + 1 < end) {
@@ -205,6 +208,7 @@
                     detectedMode: detectedSamp,
                     detectedProgressive: detectedProgressive,
                     detectedArithmetic: detectedArithmetic,
+                    restartIntervalMCUs: restartIntervalMCUs,
                     arithmeticDcTables: arithmeticDcTables,
                     arithmeticAcTables: arithmeticAcTables,
                     detectedHuffman: foundCustom ? extractedHuff : null,
