@@ -310,6 +310,25 @@
                         }
                     }
                 };
+                const buildArithmeticScanState = (compsForScan) => {
+                    const dcStatsByTable = {};
+                    const acStatsByTable = {};
+                    const compStateByType = {};
+
+                    for (const c of compsForScan) {
+                        if (!dcStatsByTable[c.dcTbl]) dcStatsByTable[c.dcTbl] = new Uint8Array(64);
+                        if (!acStatsByTable[c.acTbl]) acStatsByTable[c.acTbl] = new Uint8Array(256);
+                        if (!compStateByType[c.type]) {
+                            compStateByType[c.type] = { lastDcDiff: 0 };
+                        }
+                    }
+
+                    return {
+                        dcStatsByTable,
+                        acStatsByTable,
+                        compStateByType
+                    };
+                };
 
                 while (pos < d.length - 1) {
                     if (d[pos] !== 0xFF) { pos++; continue; }
@@ -493,8 +512,10 @@
                                         throw new Error(`Arithmetic JPEG missing AC conditioning table ${c.acTbl} for component type ${c.type}.`);
                                     }
                                 }
-
-                                throw new Error(`Arithmetic JPEG sequential scan wiring ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}).`);
+                                const arithmeticState = buildArithmeticScanState(comps);
+                                const dcStateTables = Object.keys(arithmeticState.dcStatsByTable).length;
+                                const acStateTables = Object.keys(arithmeticState.acStatsByTable).length;
+                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, restartIntervalMCUs=${restartIntervalMCUs}).`);
                             }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
