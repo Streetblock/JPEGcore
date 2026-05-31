@@ -506,6 +506,7 @@ const JpegCORE = {
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
                 let infoStr = "", detectedSamp = '420', detectedProgressive = false, detectedArithmetic = false;
+                let detectedWidth = 0, detectedHeight = 0;
                 let restartIntervalMCUs = 0;
                 const arithmeticDcTables = {};
                 const arithmeticAcTables = {};
@@ -523,6 +524,8 @@ const JpegCORE = {
                             if (type === M.SOF0 || type === M.SOF2 || type === M.SOF9) {
                                 detectedProgressive = (type === M.SOF2);
                                 detectedArithmetic = (type === M.SOF9);
+                                detectedHeight = ((d[pos + 5] << 8) | d[pos + 6]) >>> 0;
+                                detectedWidth = ((d[pos + 7] << 8) | d[pos + 8]) >>> 0;
                                 const ySamp = d[pos + 11];
                                 const numComps = d[pos + 9];
                                 if (numComps === 1) detectedSamp = 'GRAY';
@@ -604,6 +607,8 @@ const JpegCORE = {
                 if (foundCustom) infoStr += "[Huffman:Custom] "; else infoStr += "[Huffman:Std] ";
 
                 return {
+                    width: detectedWidth,
+                    height: detectedHeight,
                     detectedMode: detectedSamp,
                     detectedProgressive: detectedProgressive,
                     detectedArithmetic: detectedArithmetic,
