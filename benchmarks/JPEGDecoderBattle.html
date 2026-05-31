@@ -228,6 +228,13 @@
             }
             return false;
         };
+        const isJpegJsArithmeticUnsupported = (err) => {
+            if (!err) return false;
+            const msg = String(err.message || err).toLowerCase();
+            return msg.includes("unknown jpeg marker ffc9")
+                || msg.includes("unknown jpeg marker 0xffc9")
+                || (msg.includes("unknown jpeg marker") && msg.includes("ffc9"));
+        };
 
         fileInput.addEventListener('change', async (e) => {
             await ensureJpegJsReady();
@@ -273,11 +280,21 @@
                         refUnsupported = true;
                         imgDataJs = imgDataCore;
                     } else {
-                        const t2 = performance.now();
-                        const rawJs = JpegJS_Reference.decode(arrayBuffer, { useTArray: true });
-                        const t3 = performance.now();
-                        imgDataJs = new ImageData(new Uint8ClampedArray(rawJs.data), rawJs.width, rawJs.height);
-                        dtJs = t3 - t2;
+                        try {
+                            const t2 = performance.now();
+                            const rawJs = JpegJS_Reference.decode(arrayBuffer, { useTArray: true });
+                            const t3 = performance.now();
+                            imgDataJs = new ImageData(new Uint8ClampedArray(rawJs.data), rawJs.width, rawJs.height);
+                            dtJs = t3 - t2;
+                        } catch (decodeErr) {
+                            if (isJpegJsArithmeticUnsupported(decodeErr)) {
+                                refUnsupported = true;
+                                imgDataJs = imgDataCore;
+                                dtJs = 0;
+                            } else {
+                                throw decodeErr;
+                            }
+                        }
                     }
 
                     // 3. Compare
