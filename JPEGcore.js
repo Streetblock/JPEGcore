@@ -1236,7 +1236,6 @@ const JpegCORE = {
                                     const magClassCap = Math.max(0, high - low);
                                     while (magClass < magClassCap) {
                                         const classCtx = readPackedCtx(compCtx, magGrowSlot, 0);
-                                        classCtx.mps = 0;
                                         const inc = arithmeticDecoder.decodeBit(classCtx);
                                         writePackedCtx(compCtx, magGrowSlot, classCtx);
                                         pushTrace({ phase: "dc_mag_inc", comp: c.type, dcTbl: c.dcTbl, idx: classCtx.idx, mps: classCtx.mps, bit: inc, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
