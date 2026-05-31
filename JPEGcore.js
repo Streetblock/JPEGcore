@@ -1370,14 +1370,16 @@ const JpegCORE = {
                                             if (keepZero === STAT_MARKER || keepZero === STAT_RST || keepZero === null) return keepZero;
                                             if (keepZero === 0) break;
 
-                                            // Class-local growth confirmation: adds an extra decision
-                                            // so short/long branches can diverge statistically.
-                                            const classGrowState = readPackedCtx(acCtx, runClassSlotBase + Math.min(run, 1), 0);
-                                            const classGrow = arithmeticDecoder.decodeBit(classGrowState);
-                                            writePackedCtx(acCtx, runClassSlotBase + Math.min(run, 1), classGrowState);
-                                            pushTrace({ phase: "ac_run_class_grow", comp: c.type, acTbl: c.acTbl, k, run, idx: classGrowState.idx, mps: classGrowState.mps, bit: classGrow, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                            if (classGrow === STAT_MARKER || classGrow === STAT_RST || classGrow === null) return classGrow;
-                                            if (classGrow === 0) break;
+                                            if (acVariant !== "G") {
+                                                // Class-local growth confirmation: adds an extra decision
+                                                // so short/long branches can diverge statistically.
+                                                const classGrowState = readPackedCtx(acCtx, runClassSlotBase + Math.min(run, 1), 0);
+                                                const classGrow = arithmeticDecoder.decodeBit(classGrowState);
+                                                writePackedCtx(acCtx, runClassSlotBase + Math.min(run, 1), classGrowState);
+                                                pushTrace({ phase: "ac_run_class_grow", comp: c.type, acTbl: c.acTbl, k, run, idx: classGrowState.idx, mps: classGrowState.mps, bit: classGrow, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (classGrow === STAT_MARKER || classGrow === STAT_RST || classGrow === null) return classGrow;
+                                                if (classGrow === 0) break;
+                                            }
 
                                             run++;
                                             if (run >= runCap) break;
@@ -1420,7 +1422,9 @@ const JpegCORE = {
                                             magClass++;
                                         }
 
-                                        let magnitude = 1 + magClass;
+                                        // Annex D magnitude reconstruction:
+                                        // class 0 => 1; class n => [2^n .. 2^(n+1)-1] with n appended bits.
+                                        let magnitude = 1;
                                         let extra = magClass;
                                         while (extra-- > 0) {
                                             const magBitState = readPackedCtx(acCtx, magBitSlot(k), 0);
