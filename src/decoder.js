@@ -554,6 +554,15 @@
                                 if (sanityBit === STAT_MARKER || sanityBit === STAT_RST || sanityBit === null) {
                                     throw new Error(`Arithmetic JPEG context read failed (status=${sanityBit}).`);
                                 }
+                                const readPackedCtx = (bank, slot, defaultMps = 0) => {
+                                    const packed = bank[slot] | 0;
+                                    const mps = (packed >> 7) & 1;
+                                    const idx = packed & 0x7f;
+                                    return arithmeticDecoder.createContextState(mps || defaultMps, idx);
+                                };
+                                const writePackedCtx = (bank, slot, state) => {
+                                    bank[slot] = (((state.mps & 1) << 7) | (state.idx & 0x7f)) & 0xff;
+                                };
 
                                 const decodeArithmeticDcDiff = (c) => {
                                     const compCtx = arithmeticState.dcMagnitudeContextByType[c.type];
@@ -566,9 +575,10 @@
 
                                     // Context 0: zero/non-zero decision
                                     const zeroCtxIdx = (compCtx[0] + magClassPrev) & 0x3f;
-                                    const zeroCtx = arithmeticDecoder.createContextState(0, zeroCtxIdx);
+                                    const zeroCtx = readPackedCtx(compCtx, 0, 0);
+                                    zeroCtx.idx = zeroCtxIdx;
                                     const nonZero = arithmeticDecoder.decodeBit(zeroCtx);
-                                    compCtx[0] = zeroCtx.idx;
+                                    writePackedCtx(compCtx, 0, zeroCtx);
                                     if (nonZero === STAT_MARKER || nonZero === STAT_RST || nonZero === null) return nonZero;
                                     if (nonZero === 0) {
                                         compState.lastDcDiff = 0;
@@ -576,17 +586,17 @@
                                     }
 
                                     // Context 1: sign
-                                    const signCtx = arithmeticDecoder.createContextState((compState.lastDcDiff < 0) ? 1 : 0, compCtx[1]);
+                                    const signCtx = readPackedCtx(compCtx, 1, (compState.lastDcDiff < 0) ? 1 : 0);
                                     const signBit = arithmeticDecoder.decodeBit(signCtx);
-                                    compCtx[1] = signCtx.idx;
+                                    writePackedCtx(compCtx, 1, signCtx);
                                     if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
 
                                     // Context 2: magnitude class growth, clipped by U.
                                     let magClass = 0;
                                     while (magClass < cond.U) {
-                                        const classCtx = arithmeticDecoder.createContextState(0, compCtx[2]);
+                                        const classCtx = readPackedCtx(compCtx, 2, 0);
                                         const inc = arithmeticDecoder.decodeBit(classCtx);
-                                        compCtx[2] = classCtx.idx;
+                                        writePackedCtx(compCtx, 2, classCtx);
                                         if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
                                         if (inc === 0) break;
                                         magClass++;
@@ -596,9 +606,9 @@
                                     let magnitude = 1 + Math.max(0, cond.L) + magClass;
                                     let extraBits = magClass;
                                     while (extraBits-- > 0) {
-                                        const magBitState = arithmeticDecoder.createContextState(0, compCtx[3]);
+                                        const magBitState = readPackedCtx(compCtx, 3, 0);
                                         const b = arithmeticDecoder.decodeBit(magBitState);
-                                        compCtx[3] = magBitState.idx;
+                                        writePackedCtx(compCtx, 3, magBitState);
                                         if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
                                         magnitude = (magnitude << 1) | b;
                                     }
@@ -615,9 +625,9 @@
                                     let k = 1;
                                     while (k < 64) {
                                         // EOB decision for remaining band.
-                                        const eobState = arithmeticDecoder.createContextState(0, acCtx[63]);
+                                        const eobState = readPackedCtx(acCtx, 63, 0);
                                         const eob = arithmeticDecoder.decodeBit(eobState);
-                                        acCtx[63] = eobState.idx;
+                                        writePackedCtx(acCtx, 63, eobState);
                                         if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
                                         if (eob === 1) {
                                             break;
@@ -627,9 +637,9 @@
                                         let run = 0;
                                         while (k + run < 64) {
                                             const runSlot = 64 + Math.min(run, 15);
-                                            const runState = arithmeticDecoder.createContextState(0, acCtx[runSlot]);
+                                            const runState = readPackedCtx(acCtx, runSlot, 0);
                                             const keepZero = arithmeticDecoder.decodeBit(runState);
-                                            acCtx[runSlot] = runState.idx;
+                                            writePackedCtx(acCtx, runSlot, runState);
                                             if (keepZero === STAT_MARKER || keepZero === STAT_RST || keepZero === null) return keepZero;
                                             if (keepZero === 0) break;
                                             run++;
@@ -638,17 +648,17 @@
                                         if (k >= 64) break;
 
                                         // Sign decision (predict from current sign when available; default MPS=0).
-                                        const signState = arithmeticDecoder.createContextState(0, acCtx[k - 1]);
+                                        const signState = readPackedCtx(acCtx, k - 1, 0);
                                         const signBit = arithmeticDecoder.decodeBit(signState);
-                                        acCtx[k - 1] = signState.idx;
+                                        writePackedCtx(acCtx, k - 1, signState);
                                         if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
 
                                         // Magnitude class, bounded by DAC Kx.
                                         let magClass = 0;
                                         while (magClass < kx) {
-                                            const magState = arithmeticDecoder.createContextState(0, acCtx[k - 1]);
+                                            const magState = readPackedCtx(acCtx, k - 1, 0);
                                             const inc = arithmeticDecoder.decodeBit(magState);
-                                            acCtx[k - 1] = magState.idx;
+                                            writePackedCtx(acCtx, k - 1, magState);
                                             if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
                                             if (inc === 0) break;
                                             magClass++;
@@ -657,9 +667,9 @@
                                         let magnitude = 1 + magClass;
                                         let extra = magClass;
                                         while (extra-- > 0) {
-                                            const magBitState = arithmeticDecoder.createContextState(0, acCtx[k - 1]);
+                                            const magBitState = readPackedCtx(acCtx, k - 1, 0);
                                             const b = arithmeticDecoder.decodeBit(magBitState);
-                                            acCtx[k - 1] = magBitState.idx;
+                                            writePackedCtx(acCtx, k - 1, magBitState);
                                             if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
                                             magnitude = (magnitude << 1) | b;
                                         }
