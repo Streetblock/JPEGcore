@@ -285,9 +285,10 @@ const JpegCORE = {
             }
 
             getQeEntry(index) {
-                if (index < 0) return ArithmeticDecoder.QM_TABLE[0];
-                if (index >= ArithmeticDecoder.QM_TABLE.length) return ArithmeticDecoder.QM_TABLE[ArithmeticDecoder.QM_TABLE.length - 1];
-                return ArithmeticDecoder.QM_TABLE[index];
+                const table = this.constructor.QM_TABLE;
+                if (index < 0) return table[0];
+                if (index >= table.length) return table[table.length - 1];
+                return table[index];
             }
 
             _readByte() {
@@ -1119,6 +1120,7 @@ const JpegCORE = {
                                 const acStateTables = Object.keys(arithmeticState.acStatsByTable).length;
                                 const dcCompContexts = Object.keys(arithmeticState.dcMagnitudeContextByType).length;
                                 const acCompContexts = Object.keys(arithmeticState.acBandContextByType).length;
+                                reader.pos = sosEnd;
                                 const arithmeticDecoder = new ArithmeticDecoder(reader);
                                 const initStatus = arithmeticDecoder.initialize();
                                 if (initStatus === STAT_MARKER || initStatus === STAT_RST || initStatus === null) {
@@ -1132,7 +1134,84 @@ const JpegCORE = {
                                 if (sanityBit === STAT_MARKER || sanityBit === STAT_RST || sanityBit === null) {
                                     throw new Error(`Arithmetic JPEG context read failed (status=${sanityBit}).`);
                                 }
-                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, compCtx DC=${dcCompContexts}, AC=${acCompContexts}, restartIntervalMCUs=${restartIntervalMCUs}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
+
+                                const decodeArithmeticDcDiff = (c) => {
+                                    const compCtx = arithmeticState.dcMagnitudeContextByType[c.type];
+                                    const compState = arithmeticState.compStateByType[c.type];
+                                    const cond = arithmeticState.dcConditioningByTable[c.dcTbl];
+
+                                    // Context 0: zero/non-zero decision
+                                    const zeroCtx = arithmeticDecoder.createContextState(0, compCtx[0]);
+                                    const nonZero = arithmeticDecoder.decodeBit(zeroCtx);
+                                    compCtx[0] = zeroCtx.idx;
+                                    if (nonZero === STAT_MARKER || nonZero === STAT_RST || nonZero === null) return nonZero;
+                                    if (nonZero === 0) {
+                                        compState.lastDcDiff = 0;
+                                        return 0;
+                                    }
+
+                                    // Context 1: sign
+                                    const signCtx = arithmeticDecoder.createContextState((compState.lastDcDiff < 0) ? 1 : 0, compCtx[1]);
+                                    const signBit = arithmeticDecoder.decodeBit(signCtx);
+                                    compCtx[1] = signCtx.idx;
+                                    if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
+
+                                    // Context 2: magnitude class growth, clipped by U.
+                                    let magClass = 0;
+                                    while (magClass < cond.U) {
+                                        const classCtx = arithmeticDecoder.createContextState(0, compCtx[2]);
+                                        const inc = arithmeticDecoder.decodeBit(classCtx);
+                                        compCtx[2] = classCtx.idx;
+                                        if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
+                                        if (inc === 0) break;
+                                        magClass++;
+                                    }
+
+                                    // Lower-bound from L plus class expansion.
+                                    let magnitude = 1 + Math.max(0, cond.L) + magClass;
+                                    let extraBits = magClass;
+                                    while (extraBits-- > 0) {
+                                        const b = arithmeticDecoder.decodeBypassBit();
+                                        if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                        magnitude = (magnitude << 1) | b;
+                                    }
+
+                                    const diff = signBit ? -magnitude : magnitude;
+                                    compState.lastDcDiff = diff;
+                                    return diff;
+                                };
+
+                                // First arithmetic milestone: consume real per-block DC bits and write DC coefficients.
+                                // AC entropy path remains pending.
+                                let dcBlocksDecoded = 0;
+                                let arithmeticStopStatus = null;
+                                outerArithmeticLoop:
+                                for (let m = 0; m < cols * rows; m++) {
+                                    for (const c of comps) {
+                                        let blockIndex = -1;
+                                        for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
+                                            const blk = blockList[m * blocksPerMCU + bIdx];
+                                            if (blk && blk.comp === c.type) { blockIndex = bIdx; break; }
+                                        }
+                                        if (blockIndex < 0) continue;
+                                        const blockOffset = (m * blocksPerMCU + blockIndex) * 64;
+                                        if (blockOffset + 64 > coeff.length) break outerArithmeticLoop;
+
+                                        const diff = decodeArithmeticDcDiff(c);
+                                        if (diff === STAT_MARKER || diff === STAT_RST || diff === null) {
+                                            arithmeticStopStatus = diff;
+                                            break outerArithmeticLoop;
+                                        }
+                                        predDC[c.type] += diff;
+                                        coeff[blockOffset] = predDC[c.type];
+                                        dcBlocksDecoded++;
+                                    }
+                                }
+
+                                if (arithmeticStopStatus !== null) {
+                                    throw new Error(`Arithmetic JPEG DC stage interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}).`);
+                                }
+                                throw new Error(`Arithmetic JPEG DC stage wired, AC entropy pending (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, compCtx DC=${dcCompContexts}, AC=${acCompContexts}, restartIntervalMCUs=${restartIntervalMCUs}, dcBlocksDecoded=${dcBlocksDecoded}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
                             }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen

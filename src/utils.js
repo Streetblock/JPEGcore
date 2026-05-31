@@ -235,9 +235,10 @@
             }
 
             getQeEntry(index) {
-                if (index < 0) return ArithmeticDecoder.QM_TABLE[0];
-                if (index >= ArithmeticDecoder.QM_TABLE.length) return ArithmeticDecoder.QM_TABLE[ArithmeticDecoder.QM_TABLE.length - 1];
-                return ArithmeticDecoder.QM_TABLE[index];
+                const table = this.constructor.QM_TABLE;
+                if (index < 0) return table[0];
+                if (index >= table.length) return table[table.length - 1];
+                return table[index];
             }
 
             _readByte() {
