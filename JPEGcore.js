@@ -18,7 +18,7 @@ const JpegCORE = {
         strictArithmeticDecode: false,
         arithmeticTraceLimit: 4096,
         arithmeticDcVariant: "C",
-        arithmeticAcVariant: "E"
+        arithmeticAcVariant: "H"
     },
     // --- 1. CONSTANTS ---
     Constants: {
@@ -1247,17 +1247,15 @@ const JpegCORE = {
                                     const compCtx = arithmeticState.dcMagnitudeContextByType[c.type];
                                     const compState = arithmeticState.compStateByType[c.type];
                                     const cond = arithmeticState.dcConditioningByTable[c.dcTbl];
-                                    const dcVariant = String(JpegCORE.Config.arithmeticDcVariant || "A").toUpperCase();
                                     const prevMag = Math.abs(compState.lastDcDiff | 0);
-                                    const low = Math.max(0, cond.L | 0);
-                                    const high = Math.max(low, cond.U | 0);
-                                    const magClassPrev = prevMag === 0 ? 0 : (prevMag <= low ? 1 : (prevMag <= high ? 2 : 3));
+                                    let s0CtxIndex = 0;
+                                    if (prevMag === 1) s0CtxIndex = 1;
+                                    else if (prevMag === 2) s0CtxIndex = 2;
+                                    else if (prevMag > 2) s0CtxIndex = 3;
 
-                                    // Context 0: zero/non-zero decision
-                                    const zeroCtx = readPackedCtx(compCtx, 0, 0);
-                                    zeroCtx.idx = ((zeroCtx.idx & 0x3f) + magClassPrev) & 0x3f;
+                                    const zeroCtx = readPackedCtx(compCtx, s0CtxIndex, 0);
                                     const nonZero = arithmeticDecoder.decodeBit(zeroCtx);
-                                    writePackedCtx(compCtx, 0, zeroCtx);
+                                    writePackedCtx(compCtx, s0CtxIndex, zeroCtx);
                                     pushTrace({ phase: "dc_zero", comp: c.type, dcTbl: c.dcTbl, idx: zeroCtx.idx, mps: zeroCtx.mps, bit: nonZero, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                     if (nonZero === STAT_MARKER || nonZero === STAT_RST || nonZero === null) return nonZero;
                                     if (nonZero === 0) {
@@ -1265,47 +1263,26 @@ const JpegCORE = {
                                         return 0;
                                     }
 
-                                    // Context 1: sign
-                                    const signSeedMps = (dcVariant === "B")
-                                        ? (((compState.lastDcDiff < 0) || magClassPrev >= 2) ? 1 : 0)
-                                        : ((compState.lastDcDiff < 0) ? 1 : 0);
-                                    const signCtx = readPackedCtx(compCtx, 1, signSeedMps);
+                                    const signCtxIndex = (compState.lastDcDiff < 0) ? 5 : 4;
+                                    const signCtx = readPackedCtx(compCtx, signCtxIndex, 0);
                                     const signBit = arithmeticDecoder.decodeBit(signCtx);
-                                    writePackedCtx(compCtx, 1, signCtx);
+                                    writePackedCtx(compCtx, signCtxIndex, signCtx);
                                     pushTrace({ phase: "dc_sign", comp: c.type, dcTbl: c.dcTbl, idx: signCtx.idx, mps: signCtx.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                     if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
 
-                                    // Context 2: magnitude class growth, clipped by U.
-                                    const magGrowSlot = 2 + Math.min(magClassPrev, 3);
                                     let magClass = 0;
-                                    const magClassCap = Math.max(0, high - low);
-                                    const magIncSeedMps = (dcVariant === "B")
-                                        ? ((prevMag > high) ? 1 : 0)
-                                        : ((dcVariant === "C")
-                                            ? (signBit ? 1 : 0)
-                                            : 0);
-                                    while (magClass < magClassCap) {
-                                        const classCtx = readPackedCtx(compCtx, magGrowSlot, magIncSeedMps);
-                                        const inc = arithmeticDecoder.decodeBit(classCtx);
-                                        writePackedCtx(compCtx, magGrowSlot, classCtx);
-                                        pushTrace({ phase: "dc_mag_inc", comp: c.type, dcTbl: c.dcTbl, idx: classCtx.idx, mps: classCtx.mps, bit: inc, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
-                                        if (inc === 0) break;
+                                    let magnitude = 1;
+                                    const high = Math.max(0, (cond && cond.U) | 0);
+                                    while (magClass < high) {
+                                        const magCtxIndex = 6 + Math.min(magClass, 3);
+                                        const magCtx = readPackedCtx(compCtx, magCtxIndex, 0);
+                                        const bit = arithmeticDecoder.decodeBit(magCtx);
+                                        writePackedCtx(compCtx, magCtxIndex, magCtx);
+                                        pushTrace({ phase: "dc_mag_inc", comp: c.type, dcTbl: c.dcTbl, idx: magCtx.idx, mps: magCtx.mps, bit, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (bit === STAT_MARKER || bit === STAT_RST || bit === null) return bit;
+                                        if (bit === 0) break;
                                         magClass++;
-                                    }
-
-                                    // Lower-bound from L-window plus class expansion.
-                                    // Keep stage monotonic while avoiding oversized base jumps.
-                                    let magnitude = 1 + Math.max(0, low) + magClass;
-                                    let extraBits = magClass;
-                                    const magBitSlot = 6 + Math.min(magClassPrev, 1);
-                                    while (extraBits-- > 0) {
-                                        const magBitState = readPackedCtx(compCtx, magBitSlot, 0);
-                                        const b = arithmeticDecoder.decodeBit(magBitState);
-                                        writePackedCtx(compCtx, magBitSlot, magBitState);
-                                        pushTrace({ phase: "dc_mag_bit", comp: c.type, dcTbl: c.dcTbl, idx: magBitState.idx, mps: magBitState.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
-                                        magnitude = (magnitude << 1) | b;
+                                        magnitude = (magnitude << 1) | bit;
                                     }
 
                                     const diff = signBit ? -magnitude : magnitude;
@@ -1316,128 +1293,51 @@ const JpegCORE = {
                                 const decodeArithmeticAcBlock = (blockOffset, c) => {
                                     const acCtx = arithmeticState.acBandContextByType[c.type];
                                     const acCond = arithmeticState.acConditioningByTable[c.acTbl];
-                                    const compState = arithmeticState.compStateByType[c.type];
-                                    const acVariant = String(JpegCORE.Config.arithmeticAcVariant || "A").toUpperCase();
                                     const kx = acCond && acCond.Kx ? acCond.Kx : 5;
-                                    const sigSlot = (kk) => (kk - 1);
-                                    const signSlot = (kk) => (80 + (kk - 1));
-                                    const magIncSlot = (kk, stage) => {
-                                        if (acVariant !== "F") return 143 + (kk - 1);
-                                        return 277 + (Math.max(0, Math.min(2, stage | 0)) * 63) + (kk - 1);
-                                    };
-                                    const magBitSlot = (kk) => (206 + (kk - 1));
-                                    const eobSlot = (kk) => {
-                                        if (acVariant !== "D") return 63;
-                                        if (kk <= 8) return 273;
-                                        if (kk <= 24) return 274;
-                                        if (kk <= 40) return 275;
-                                        return 276;
-                                    };
                                     let k = 1;
                                     while (k < 64) {
-                                        // EOB decision for remaining band.
-                                        const eobSeedMps = (acVariant === "B")
-                                            ? ((c.type === 0) ? 0 : ((compState.lastAcSign ? 1 : 0)))
-                                            : ((acVariant === "C")
-                                                ? ((c.type === 0) ? 0 : 1)
-                                                : 0);
-                                        const eobState = readPackedCtx(acCtx, eobSlot(k), eobSeedMps);
-                                        const eob = arithmeticDecoder.decodeBit(eobState);
-                                        writePackedCtx(acCtx, eobSlot(k), eobState);
-                                        pushTrace({ phase: "ac_eob", comp: c.type, acTbl: c.acTbl, k, idx: eobState.idx, mps: eobState.mps, bit: eob, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
-                                        if (eob === 1) {
-                                            break;
+                                        const eobCtxIndex = k;
+                                        const eobState = readPackedCtx(acCtx, eobCtxIndex, 0);
+                                        const eobBit = arithmeticDecoder.decodeBit(eobState);
+                                        writePackedCtx(acCtx, eobCtxIndex, eobState);
+                                        pushTrace({ phase: "ac_eob", comp: c.type, acTbl: c.acTbl, k, idx: eobState.idx, mps: eobState.mps, bit: eobBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (eobBit === STAT_MARKER || eobBit === STAT_RST || eobBit === null) return eobBit;
+                                        if (eobBit === 1) break;
+
+                                        const sigCtxIndex = 64 + k;
+                                        const sigState = readPackedCtx(acCtx, sigCtxIndex, 0);
+                                        const sigBit = arithmeticDecoder.decodeBit(sigState);
+                                        writePackedCtx(acCtx, sigCtxIndex, sigState);
+                                        pushTrace({ phase: "ac_sig", comp: c.type, acTbl: c.acTbl, k, idx: sigState.idx, mps: sigState.mps, bit: sigBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (sigBit === STAT_MARKER || sigBit === STAT_RST || sigBit === null) return sigBit;
+                                        if (sigBit === 0) {
+                                            k++;
+                                            continue;
                                         }
 
-                                        // Zero-run classification + growth before next non-zero coefficient.
-                                        // Stage 1: short vs long run class.
-                                        const runClassState = readPackedCtx(acCtx, 269, 0);
-                                        const longRunClass = arithmeticDecoder.decodeBit(runClassState);
-                                        writePackedCtx(acCtx, 269, runClassState);
-                                        pushTrace({ phase: "ac_run_class", comp: c.type, acTbl: c.acTbl, k, idx: runClassState.idx, mps: runClassState.mps, bit: longRunClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        if (longRunClass === STAT_MARKER || longRunClass === STAT_RST || longRunClass === null) return longRunClass;
-
-                                        let run = 0;
-                                        const runCap = longRunClass ? 63 : 7;
-                                        const runClassSlotBase = longRunClass ? 271 : 270;
-                                        while (k + run < 64) {
-                                            const runSlot = 64 + Math.min(run, 15);
-                                            const runState = readPackedCtx(acCtx, runSlot, 0);
-                                            const keepZero = arithmeticDecoder.decodeBit(runState);
-                                            writePackedCtx(acCtx, runSlot, runState);
-                                            pushTrace({ phase: "ac_run", comp: c.type, acTbl: c.acTbl, k, run, idx: runState.idx, mps: runState.mps, bit: keepZero, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                            if (keepZero === STAT_MARKER || keepZero === STAT_RST || keepZero === null) return keepZero;
-                                            if (keepZero === 0) break;
-
-                                            if (acVariant !== "G") {
-                                                // Class-local growth confirmation: adds an extra decision
-                                                // so short/long branches can diverge statistically.
-                                                const classGrowState = readPackedCtx(acCtx, runClassSlotBase + Math.min(run, 1), 0);
-                                                const classGrow = arithmeticDecoder.decodeBit(classGrowState);
-                                                writePackedCtx(acCtx, runClassSlotBase + Math.min(run, 1), classGrowState);
-                                                pushTrace({ phase: "ac_run_class_grow", comp: c.type, acTbl: c.acTbl, k, run, idx: classGrowState.idx, mps: classGrowState.mps, bit: classGrow, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                                if (classGrow === STAT_MARKER || classGrow === STAT_RST || classGrow === null) return classGrow;
-                                                if (classGrow === 0) break;
-                                            }
-
-                                            run++;
-                                            if (run >= runCap) break;
-                                        }
-                                        k += run;
-                                        if (k >= 64) break;
-
-                                        let significant = 1;
-                                        if (acVariant !== "E") {
-                                            // Significance decision for the selected band position.
-                                            const sigState = readPackedCtx(acCtx, sigSlot(k), 0);
-                                            significant = arithmeticDecoder.decodeBit(sigState);
-                                            writePackedCtx(acCtx, sigSlot(k), sigState);
-                                            pushTrace({ phase: "ac_sig", comp: c.type, acTbl: c.acTbl, k, idx: sigState.idx, mps: sigState.mps, bit: significant, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                            if (significant === STAT_MARKER || significant === STAT_RST || significant === null) return significant;
-                                            if (significant === 0) {
-                                                k++;
-                                                continue;
-                                            }
-                                        } else {
-                                            pushTrace({ phase: "ac_sig_implicit", comp: c.type, acTbl: c.acTbl, k, bit: 1, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        }
-
-                                        // Sign decision (predict from current sign when available; default MPS=0).
-                                        const signState = readPackedCtx(acCtx, signSlot(k), compState.lastAcSign);
+                                        const signCtxIndex = 128 + k;
+                                        const signState = readPackedCtx(acCtx, signCtxIndex, 0);
                                         const signBit = arithmeticDecoder.decodeBit(signState);
-                                        writePackedCtx(acCtx, signSlot(k), signState);
+                                        writePackedCtx(acCtx, signCtxIndex, signState);
                                         pushTrace({ phase: "ac_sign", comp: c.type, acTbl: c.acTbl, k, idx: signState.idx, mps: signState.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
 
-                                        // Magnitude class, bounded by DAC Kx.
                                         let magClass = 0;
-                                        while (magClass < kx) {
-                                            const magState = readPackedCtx(acCtx, magIncSlot(k, magClass), 0);
-                                            const inc = arithmeticDecoder.decodeBit(magState);
-                                            writePackedCtx(acCtx, magIncSlot(k, magClass), magState);
-                                            pushTrace({ phase: "ac_mag_inc", comp: c.type, acTbl: c.acTbl, k, idx: magState.idx, mps: magState.mps, bit: inc, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                            if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
-                                            if (inc === 0) break;
-                                            magClass++;
-                                        }
-
-                                        // Annex D magnitude reconstruction:
-                                        // class 0 => 1; class n => [2^n .. 2^(n+1)-1] with n appended bits.
                                         let magnitude = 1;
-                                        let extra = magClass;
-                                        while (extra-- > 0) {
-                                            const magBitState = readPackedCtx(acCtx, magBitSlot(k), 0);
-                                            const b = arithmeticDecoder.decodeBit(magBitState);
-                                            writePackedCtx(acCtx, magBitSlot(k), magBitState);
-                                            pushTrace({ phase: "ac_mag_bit", comp: c.type, acTbl: c.acTbl, k, idx: magBitState.idx, mps: magBitState.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                            if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
-                                            magnitude = (magnitude << 1) | b;
+                                        while (magClass < kx) {
+                                            const magCtxIndex = 192 + Math.min(magClass, 3);
+                                            const magState = readPackedCtx(acCtx, magCtxIndex, 0);
+                                            const bit = arithmeticDecoder.decodeBit(magState);
+                                            writePackedCtx(acCtx, magCtxIndex, magState);
+                                            pushTrace({ phase: "ac_mag_inc", comp: c.type, acTbl: c.acTbl, k, idx: magState.idx, mps: magState.mps, bit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (bit === STAT_MARKER || bit === STAT_RST || bit === null) return bit;
+                                            if (bit === 0) break;
+                                            magClass++;
+                                            magnitude = (magnitude << 1) | bit;
                                         }
 
                                         const value = signBit ? -magnitude : magnitude;
                                         coeff[blockOffset + zig[k]] = value;
-                                        compState.lastAcSign = signBit ? 1 : 0;
                                         k++;
                                     }
                                     return 0;
