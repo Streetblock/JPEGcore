@@ -382,14 +382,16 @@ const JpegCORE = {
                                     const tb = tcTb & 0x0F;
                                     if (tb > 3) continue;
                                     if (tc === 0) {
-                                        arithmeticDcTables[tb] = {
-                                            L: (cond >> 4) & 0x0F,
-                                            U: cond & 0x0F
-                                        };
+                                        const U = (cond >> 4) & 0x0F;
+                                        const L = cond & 0x0F;
+                                        if (L <= U) {
+                                            arithmeticDcTables[tb] = { L, U };
+                                        }
                                     } else if (tc === 1) {
-                                        arithmeticAcTables[tb] = {
-                                            Kx: cond & 0x1F
-                                        };
+                                        const Kx = cond & 0x3F;
+                                        if (Kx >= 1 && Kx <= 63) {
+                                            arithmeticAcTables[tb] = { Kx };
+                                        }
                                     }
                                 }
                                 detectedArithmetic = true;
@@ -747,12 +749,16 @@ const JpegCORE = {
                         if (tb > 3) continue;
 
                         if (tc === 0) {
-                            const L = (conditioning >> 4) & 0x0F;
-                            const U = conditioning & 0x0F;
-                            arithmeticTables.dc[tb] = { L, U };
+                            const U = (conditioning >> 4) & 0x0F;
+                            const L = conditioning & 0x0F;
+                            if (L <= U) {
+                                arithmeticTables.dc[tb] = { L, U };
+                            }
                         } else if (tc === 1) {
-                            const Kx = conditioning & 0x1F;
-                            arithmeticTables.ac[tb] = { Kx };
+                            const Kx = conditioning & 0x3F;
+                            if (Kx >= 1 && Kx <= 63) {
+                                arithmeticTables.ac[tb] = { Kx };
+                            }
                         }
                     }
                 };

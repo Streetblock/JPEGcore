@@ -161,14 +161,16 @@
                                     const tb = tcTb & 0x0F;
                                     if (tb > 3) continue;
                                     if (tc === 0) {
-                                        arithmeticDcTables[tb] = {
-                                            L: (cond >> 4) & 0x0F,
-                                            U: cond & 0x0F
-                                        };
+                                        const U = (cond >> 4) & 0x0F;
+                                        const L = cond & 0x0F;
+                                        if (L <= U) {
+                                            arithmeticDcTables[tb] = { L, U };
+                                        }
                                     } else if (tc === 1) {
-                                        arithmeticAcTables[tb] = {
-                                            Kx: cond & 0x1F
-                                        };
+                                        const Kx = cond & 0x3F;
+                                        if (Kx >= 1 && Kx <= 63) {
+                                            arithmeticAcTables[tb] = { Kx };
+                                        }
                                     }
                                 }
                                 detectedArithmetic = true;

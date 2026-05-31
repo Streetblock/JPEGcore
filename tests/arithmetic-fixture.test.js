@@ -32,6 +32,14 @@ async function main() {
   assert.equal(probe.detectedArithmetic, true);
   assert.ok(Object.keys(probe.arithmeticDcTables || {}).length > 0, "probe should parse DAC DC tables");
   assert.ok(Object.keys(probe.arithmeticAcTables || {}).length > 0, "probe should parse DAC AC tables");
+  for (const table of Object.values(probe.arithmeticDcTables || {})) {
+    assert.ok(table.L >= 0 && table.L <= 15, "DC conditioning L out of range");
+    assert.ok(table.U >= 0 && table.U <= 15, "DC conditioning U out of range");
+    assert.ok(table.L <= table.U, "DC conditioning must satisfy L <= U");
+  }
+  for (const table of Object.values(probe.arithmeticAcTables || {})) {
+    assert.ok(table.Kx >= 1 && table.Kx <= 63, "AC conditioning Kx out of range");
+  }
 
   // Current baseline expectation for this branch:
   // arithmetic-coded JPEG is not decoded yet and should fail cleanly.

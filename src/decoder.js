@@ -296,12 +296,16 @@
                         if (tb > 3) continue;
 
                         if (tc === 0) {
-                            const L = (conditioning >> 4) & 0x0F;
-                            const U = conditioning & 0x0F;
-                            arithmeticTables.dc[tb] = { L, U };
+                            const U = (conditioning >> 4) & 0x0F;
+                            const L = conditioning & 0x0F;
+                            if (L <= U) {
+                                arithmeticTables.dc[tb] = { L, U };
+                            }
                         } else if (tc === 1) {
-                            const Kx = conditioning & 0x1F;
-                            arithmeticTables.ac[tb] = { Kx };
+                            const Kx = conditioning & 0x3F;
+                            if (Kx >= 1 && Kx <= 63) {
+                                arithmeticTables.ac[tb] = { Kx };
+                            }
                         }
                     }
                 };
