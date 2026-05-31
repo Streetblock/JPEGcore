@@ -1472,41 +1472,40 @@ const JpegCORE = {
                                 for (let m = 0; m < cols * rows; m++) {
                                     let mcuDone = false;
                                     for (const c of comps) {
-                                        let blockIndex = -1;
                                         for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
                                             const blk = blockList[m * blocksPerMCU + bIdx];
-                                            if (blk && blk.comp === c.type) { blockIndex = bIdx; break; }
-                                        }
-                                        if (blockIndex < 0) continue;
-                                        const blockOffset = (m * blocksPerMCU + blockIndex) * 64;
-                                        if (blockOffset + 64 > coeff.length) break outerArithmeticLoop;
+                                            if (!blk || blk.comp !== c.type) continue;
 
-                                        const diff = decodeArithmeticDcDiff(c);
-                                        if (diff === STAT_RST) {
-                                            rstEvents++;
-                                            resetArithmeticRestartState();
-                                            continue;
-                                        }
-                                        if (diff === STAT_MARKER || diff === null) {
-                                            arithmeticStopStatus = diff;
-                                            break outerArithmeticLoop;
-                                        }
-                                        predDC[c.type] += diff;
-                                        coeff[blockOffset] = predDC[c.type];
-                                        dcBlocksDecoded++;
+                                            const blockOffset = (m * blocksPerMCU + bIdx) * 64;
+                                            if (blockOffset + 64 > coeff.length) break outerArithmeticLoop;
 
-                                        const acStatus = decodeArithmeticAcBlock(blockOffset, c);
-                                        if (acStatus === STAT_RST) {
-                                            rstEvents++;
-                                            resetArithmeticRestartState();
-                                            continue;
+                                            const diff = decodeArithmeticDcDiff(c);
+                                            if (diff === STAT_RST) {
+                                                rstEvents++;
+                                                resetArithmeticRestartState();
+                                                continue;
+                                            }
+                                            if (diff === STAT_MARKER || diff === null) {
+                                                arithmeticStopStatus = diff;
+                                                break outerArithmeticLoop;
+                                            }
+                                            predDC[c.type] += diff;
+                                            coeff[blockOffset] = predDC[c.type];
+                                            dcBlocksDecoded++;
+
+                                            const acStatus = decodeArithmeticAcBlock(blockOffset, c);
+                                            if (acStatus === STAT_RST) {
+                                                rstEvents++;
+                                                resetArithmeticRestartState();
+                                                continue;
+                                            }
+                                            if (acStatus === STAT_MARKER || acStatus === null) {
+                                                arithmeticStopStatus = acStatus;
+                                                break outerArithmeticLoop;
+                                            }
+                                            acBlocksDecoded++;
+                                            mcuDone = true;
                                         }
-                                        if (acStatus === STAT_MARKER || acStatus === null) {
-                                            arithmeticStopStatus = acStatus;
-                                            break outerArithmeticLoop;
-                                        }
-                                        acBlocksDecoded++;
-                                        mcuDone = true;
                                     }
                                     if (mcuDone && restartIntervalMCUs > 0) {
                                         mcusSinceRestart++;
