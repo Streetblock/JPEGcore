@@ -171,12 +171,73 @@
         // This is the shared stateful arithmetic core used by SOF9 decoding paths.
         // The full coefficient decode wiring is implemented incrementally in decoder.js.
         ArithmeticDecoder: class {
+            static QM_TABLE = [
+                { qe: 0x5a1d, nmps: 1, nlps: 1, switchMps: 1 },
+                { qe: 0x2586, nmps: 2, nlps: 6, switchMps: 0 },
+                { qe: 0x1114, nmps: 3, nlps: 9, switchMps: 0 },
+                { qe: 0x080b, nmps: 4, nlps: 12, switchMps: 0 },
+                { qe: 0x03d8, nmps: 5, nlps: 29, switchMps: 0 },
+                { qe: 0x01da, nmps: 38, nlps: 33, switchMps: 0 },
+                { qe: 0x5a1d, nmps: 7, nlps: 6, switchMps: 1 },
+                { qe: 0x2586, nmps: 8, nlps: 14, switchMps: 0 },
+                { qe: 0x14cd, nmps: 9, nlps: 14, switchMps: 0 },
+                { qe: 0x080b, nmps: 10, nlps: 14, switchMps: 0 },
+                { qe: 0x03d8, nmps: 11, nlps: 17, switchMps: 0 },
+                { qe: 0x01da, nmps: 12, nlps: 18, switchMps: 0 },
+                { qe: 0x00e5, nmps: 13, nlps: 20, switchMps: 0 },
+                { qe: 0x006f, nmps: 29, nlps: 21, switchMps: 0 },
+                { qe: 0x0036, nmps: 15, nlps: 14, switchMps: 0 },
+                { qe: 0x001a, nmps: 16, nlps: 14, switchMps: 0 },
+                { qe: 0x000d, nmps: 17, nlps: 15, switchMps: 0 },
+                { qe: 0x0006, nmps: 18, nlps: 16, switchMps: 0 },
+                { qe: 0x0003, nmps: 19, nlps: 17, switchMps: 0 },
+                { qe: 0x0001, nmps: 20, nlps: 18, switchMps: 0 },
+                { qe: 0x5a1d, nmps: 21, nlps: 19, switchMps: 1 },
+                { qe: 0x2586, nmps: 22, nlps: 19, switchMps: 0 },
+                { qe: 0x1114, nmps: 23, nlps: 20, switchMps: 0 },
+                { qe: 0x080b, nmps: 24, nlps: 21, switchMps: 0 },
+                { qe: 0x03d8, nmps: 25, nlps: 22, switchMps: 0 },
+                { qe: 0x01da, nmps: 26, nlps: 23, switchMps: 0 },
+                { qe: 0x00e5, nmps: 27, nlps: 24, switchMps: 0 },
+                { qe: 0x006f, nmps: 28, nlps: 25, switchMps: 0 },
+                { qe: 0x0036, nmps: 29, nlps: 26, switchMps: 0 },
+                { qe: 0x001a, nmps: 30, nlps: 27, switchMps: 0 },
+                { qe: 0x000d, nmps: 31, nlps: 28, switchMps: 0 },
+                { qe: 0x0006, nmps: 32, nlps: 29, switchMps: 0 },
+                { qe: 0x0003, nmps: 33, nlps: 30, switchMps: 0 },
+                { qe: 0x0001, nmps: 34, nlps: 31, switchMps: 0 },
+                { qe: 0x5a1d, nmps: 35, nlps: 32, switchMps: 1 },
+                { qe: 0x2586, nmps: 36, nlps: 33, switchMps: 0 },
+                { qe: 0x1114, nmps: 37, nlps: 34, switchMps: 0 },
+                { qe: 0x080b, nmps: 38, nlps: 35, switchMps: 0 },
+                { qe: 0x03d8, nmps: 39, nlps: 36, switchMps: 0 },
+                { qe: 0x01da, nmps: 40, nlps: 37, switchMps: 0 },
+                { qe: 0x00e5, nmps: 41, nlps: 38, switchMps: 0 },
+                { qe: 0x006f, nmps: 42, nlps: 39, switchMps: 0 },
+                { qe: 0x0036, nmps: 43, nlps: 40, switchMps: 0 },
+                { qe: 0x001a, nmps: 44, nlps: 41, switchMps: 0 },
+                { qe: 0x000d, nmps: 45, nlps: 42, switchMps: 0 },
+                { qe: 0x0006, nmps: 45, nlps: 43, switchMps: 0 },
+                { qe: 0x0003, nmps: 46, nlps: 44, switchMps: 0 },
+                { qe: 0x0001, nmps: 46, nlps: 45, switchMps: 0 }
+            ];
+
             constructor(bitReader) {
                 this.reader = bitReader;
                 this.c = 0;
                 this.a = 0x10000;
                 this.ct = 0;
                 this.initialized = false;
+            }
+
+            createContextState(initialMps = 0, initialIdx = 0) {
+                return { mps: initialMps ? 1 : 0, idx: initialIdx | 0 };
+            }
+
+            getQeEntry(index) {
+                if (index < 0) return ArithmeticDecoder.QM_TABLE[0];
+                if (index >= ArithmeticDecoder.QM_TABLE.length) return ArithmeticDecoder.QM_TABLE[ArithmeticDecoder.QM_TABLE.length - 1];
+                return ArithmeticDecoder.QM_TABLE[index];
             }
 
             _readByte() {
@@ -206,6 +267,25 @@
             // Temporary placeholder until full QM-state machine is wired.
             decodeBypassBit() {
                 return this.reader.nextBit();
+            }
+
+            // API-compatible context decode hook.
+            // Current stage uses bypass bit sampling while already applying
+            // context-state transitions (nmps/nlps/switchMps).
+            decodeBit(contextState) {
+                if (!contextState) contextState = this.createContextState(0, 0);
+                const qe = this.getQeEntry(contextState.idx | 0);
+                const rawBit = this.decodeBypassBit();
+                if (rawBit === null || rawBit < 0) return rawBit;
+
+                if (rawBit === contextState.mps) {
+                    contextState.idx = qe.nmps;
+                    return contextState.mps;
+                }
+
+                if (qe.switchMps) contextState.mps ^= 1;
+                contextState.idx = qe.nlps;
+                return contextState.mps ^ 1;
             }
         }
     },

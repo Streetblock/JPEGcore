@@ -524,7 +524,12 @@
                                 if (!arithmeticDecoder.initialized) {
                                     throw new Error("Arithmetic JPEG init failed (decoder not initialized).");
                                 }
-                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, restartIntervalMCUs=${restartIntervalMCUs}, init=ok).`);
+                                const sanityCtx = arithmeticDecoder.createContextState(0, 0);
+                                const sanityBit = arithmeticDecoder.decodeBit(sanityCtx);
+                                if (sanityBit === STAT_MARKER || sanityBit === STAT_RST || sanityBit === null) {
+                                    throw new Error(`Arithmetic JPEG context read failed (status=${sanityBit}).`);
+                                }
+                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, restartIntervalMCUs=${restartIntervalMCUs}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
                             }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
