@@ -337,8 +337,8 @@
                             dcMagnitudeContextByType[c.type] = new Uint8Array(5);
                         }
                         if (!acBandContextByType[c.type]) {
-                            // Reserve one context slot per zig-zag AC coefficient position.
-                            acBandContextByType[c.type] = new Uint8Array(63);
+                            // 0..62: per-band slots, 63: EOB, 64..79: run modeling slots.
+                            acBandContextByType[c.type] = new Uint8Array(80);
                         }
                     }
 
@@ -614,15 +614,28 @@
                                     const kx = acCond && acCond.Kx ? acCond.Kx : 5;
                                     let k = 1;
                                     while (k < 64) {
-                                        // Band significance decision for current zig-zag index.
-                                        const sigState = arithmeticDecoder.createContextState(0, acCtx[k - 1]);
-                                        const significant = arithmeticDecoder.decodeBit(sigState);
-                                        acCtx[k - 1] = sigState.idx;
-                                        if (significant === STAT_MARKER || significant === STAT_RST || significant === null) return significant;
-                                        if (significant === 0) {
-                                            k++;
-                                            continue;
+                                        // EOB decision for remaining band.
+                                        const eobState = arithmeticDecoder.createContextState(0, acCtx[63]);
+                                        const eob = arithmeticDecoder.decodeBit(eobState);
+                                        acCtx[63] = eobState.idx;
+                                        if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
+                                        if (eob === 1) {
+                                            break;
                                         }
+
+                                        // Zero-run growth before next non-zero coefficient.
+                                        let run = 0;
+                                        while (k + run < 64) {
+                                            const runSlot = 64 + Math.min(run, 15);
+                                            const runState = arithmeticDecoder.createContextState(0, acCtx[runSlot]);
+                                            const keepZero = arithmeticDecoder.decodeBit(runState);
+                                            acCtx[runSlot] = runState.idx;
+                                            if (keepZero === STAT_MARKER || keepZero === STAT_RST || keepZero === null) return keepZero;
+                                            if (keepZero === 0) break;
+                                            run++;
+                                        }
+                                        k += run;
+                                        if (k >= 64) break;
 
                                         // Sign decision (predict from current sign when available; default MPS=0).
                                         const signState = arithmeticDecoder.createContextState(0, acCtx[k - 1]);
