@@ -343,11 +343,12 @@ const JpegCORE = {
             constructor(bitReader) {
                 this.reader = bitReader;
                 this.c = 0;
-                this.a = 0x10000;
-                this.ct = 0;
+                this.a = 0;
+                this.ct = -16;
                 this.initialized = false;
                 this.entropyByte = 0;
                 this.entropyBitsLeft = 0;
+                this.unreadMarker = 0;
             }
 
             createContextState(initialMps = 0, initialIdx = 0) {
@@ -361,32 +362,10 @@ const JpegCORE = {
                 return table[index];
             }
 
-            _byteIn() {
+            _byteInRaw() {
                 const d = this.reader.d;
                 if (this.reader.pos >= d.length) return null;
-                let b = d[this.reader.pos++];
-
-                if (b !== 0xff) return b;
-
-                // Skip fill bytes.
-                while (this.reader.pos < d.length && d[this.reader.pos] === 0xff) {
-                    this.reader.pos++;
-                }
-                if (this.reader.pos >= d.length) return null;
-
-                const next = d[this.reader.pos];
-                if (next === 0x00) {
-                    this.reader.pos++;
-                    return 0xff;
-                }
-                if (next >= 0xd0 && next <= 0xd7) {
-                    this.reader.pos++;
-                    return this.reader.STAT_RST;
-                }
-                if (next === 0xd9) {
-                    return null;
-                }
-                return this.reader.STAT_MARKER;
+                return d[this.reader.pos++];
             }
 
             _nextEntropyBit() {
@@ -404,13 +383,10 @@ const JpegCORE = {
             initialize() {
                 this.reader.reset();
                 this.entropyBitsLeft = 0;
-                const b1 = this._byteIn();
-                if (b1 === null || b1 < 0) return b1;
-                const b2 = this._byteIn();
-                if (b2 === null || b2 < 0) return b2;
-                this.c = (b1 << 8) | b2;
-                this.a = 0x10000;
-                this.ct = 0;
+                this.unreadMarker = 0;
+                this.c = 0;
+                this.a = 0;
+                this.ct = -16;
                 this.initialized = true;
                 return 0;
             }
@@ -442,10 +418,29 @@ const JpegCORE = {
 
             _renorm() {
                 while (this.a < 0x8000) {
-                    const inBit = this._nextEntropyBit();
-                    if (inBit === null || inBit < 0) return inBit;
+                    if (--this.ct < 0) {
+                        let data = 0;
+                        if (!this.unreadMarker) {
+                            data = this._byteInRaw();
+                            if (data === null) return null;
+                            if (data === 0xff) {
+                                do {
+                                    data = this._byteInRaw();
+                                    if (data === null) return null;
+                                } while (data === 0xff);
+                                if (data === 0x00) data = 0xff;
+                                else {
+                                    this.unreadMarker = data;
+                                    data = 0;
+                                }
+                            }
+                        }
+                        this.c = ((this.c << 8) | data) >>> 0;
+                        if ((this.ct += 8) < 0) {
+                            if (++this.ct === 0) this.a = 0x8000;
+                        }
+                    }
                     this.a <<= 1;
-                    this.c = ((this.c << 1) | inBit) & 0x1ffff;
                 }
                 return 0;
             }
@@ -464,18 +459,37 @@ const JpegCORE = {
                     if (st === null || st < 0) return st;
                 }
                 const qe = this.getQeEntry(contextState.idx | 0);
-                this.a -= qe.qe;
+                const qev = qe.qe >>> 0;
+                let svMps = contextState.mps ? 1 : 0;
+
+                let temp = (this.a - qev) >>> 0;
+                this.a = temp;
+                const shifted = (temp << this.ct) >>> 0;
 
                 let decodedBit;
-                if ((this.c & 0xffff) < this.a) {
-                    decodedBit = contextState.mps;
-                    contextState.idx = qe.nmps;
+                if ((this.c >>> 0) >= shifted) {
+                    this.c = ((this.c - shifted) >>> 0);
+                    if (this.a < qev) {
+                        this.a = qev;
+                        contextState.idx = qe.nmps;
+                        decodedBit = svMps;
+                    } else {
+                        this.a = qev;
+                        contextState.idx = qe.nlps;
+                        decodedBit = svMps ^ 1;
+                        if (qe.switchMps) contextState.mps ^= 1;
+                    }
+                } else if (this.a < 0x8000) {
+                    if (this.a < qev) {
+                        contextState.idx = qe.nlps;
+                        decodedBit = svMps ^ 1;
+                        if (qe.switchMps) contextState.mps ^= 1;
+                    } else {
+                        contextState.idx = qe.nmps;
+                        decodedBit = svMps;
+                    }
                 } else {
-                    this.c = (this.c - this.a) & 0x1ffff;
-                    this.a = qe.qe;
-                    if (qe.switchMps) contextState.mps ^= 1;
-                    contextState.idx = qe.nlps;
-                    decodedBit = contextState.mps ^ 1;
+                    decodedBit = svMps;
                 }
 
                 const renormStatus = this._renorm();
