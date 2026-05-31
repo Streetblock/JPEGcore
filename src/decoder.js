@@ -333,8 +333,12 @@
                             compStateByType[c.type] = { lastDcDiff: 0, lastAcSign: 0 };
                         }
                         if (!dcMagnitudeContextByType[c.type]) {
-                            // JPEG arithmetic DC commonly uses 5 context slots per component.
-                            dcMagnitudeContextByType[c.type] = new Uint8Array(5);
+                            // Stage layout:
+                            // 0: zero/non-zero
+                            // 1: sign
+                            // 2..5: mag-class growth by previous magnitude class bucket
+                            // 6..7: magnitude bits by previous magnitude class bucket
+                            dcMagnitudeContextByType[c.type] = new Uint8Array(8);
                         }
                         if (!acBandContextByType[c.type]) {
                             // Packed AC context bank layout:
@@ -627,11 +631,12 @@
                                     if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
 
                                     // Context 2: magnitude class growth, clipped by U.
+                                    const magGrowSlot = 2 + Math.min(magClassPrev, 3);
                                     let magClass = 0;
                                     while (magClass < cond.U) {
-                                        const classCtx = readPackedCtx(compCtx, 2, 0);
+                                        const classCtx = readPackedCtx(compCtx, magGrowSlot, 0);
                                         const inc = arithmeticDecoder.decodeBit(classCtx);
-                                        writePackedCtx(compCtx, 2, classCtx);
+                                        writePackedCtx(compCtx, magGrowSlot, classCtx);
                                         pushTrace({ phase: "dc_mag_inc", comp: c.type, dcTbl: c.dcTbl, idx: classCtx.idx, mps: classCtx.mps, bit: inc, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
                                         if (inc === 0) break;
@@ -641,10 +646,11 @@
                                     // Lower-bound from L plus class expansion.
                                     let magnitude = 1 + Math.max(0, cond.L) + magClass;
                                     let extraBits = magClass;
+                                    const magBitSlot = 6 + Math.min(magClassPrev, 1);
                                     while (extraBits-- > 0) {
-                                        const magBitState = readPackedCtx(compCtx, 3, 0);
+                                        const magBitState = readPackedCtx(compCtx, magBitSlot, 0);
                                         const b = arithmeticDecoder.decodeBit(magBitState);
-                                        writePackedCtx(compCtx, 3, magBitState);
+                                        writePackedCtx(compCtx, magBitSlot, magBitState);
                                         pushTrace({ phase: "dc_mag_bit", comp: c.type, dcTbl: c.dcTbl, idx: magBitState.idx, mps: magBitState.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
                                         magnitude = (magnitude << 1) | b;
