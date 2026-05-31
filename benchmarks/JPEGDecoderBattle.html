@@ -250,6 +250,8 @@
                     // RUN BENCHMARK
                     // ---------------------------------
                     const arrayBuffer = await file.arrayBuffer();
+                    const meta = await JpegCORE.Analysis.probe(new Blob([arrayBuffer]));
+                    const orientation = meta ? meta.detectedOrientation : 1;
 
                     // 1. JpegCORE Run
                     const t0 = performance.now();
@@ -295,7 +297,7 @@
                     `;
 
                     // Interaction
-                    const resultData = { imgDataCore, imgDataJs, dtCore, dtJs, rmse };
+                    const resultData = { imgDataCore, imgDataJs, dtCore, dtJs, rmse, orientation };
                     row.onclick = () => showComparison(resultData, file.name);
 
                     // Auto-select first result
@@ -360,17 +362,58 @@
             document.getElementById('timeJs').innerText = res.dtJs.toFixed(1) + 'ms';
             document.getElementById('valRmse').innerText = res.rmse.toFixed(2);
 
-            renderToCanvas('canvasCore', res.imgDataCore);
-            renderToCanvas('canvasJs', res.imgDataJs);
+            renderToCanvas('canvasCore', res.imgDataCore, res.orientation);
+            renderToCanvas('canvasJs', res.imgDataJs, res.orientation);
             renderDiff('canvasDiff', res.imgDataCore, res.imgDataJs, diffStyleSelect.value);
         }
 
-        function renderToCanvas(id, imgData) {
+        function renderToCanvas(id, imgData, orientation = 1) {
             const c = document.getElementById(id);
-            c.width = imgData.width;
-            c.height = imgData.height;
+            const normalized = Number(orientation) || 1;
+            const swapsAxes = normalized >= 5 && normalized <= 8;
+            c.width = swapsAxes ? imgData.height : imgData.width;
+            c.height = swapsAxes ? imgData.width : imgData.height;
+
+            const scratch = document.createElement('canvas');
+            scratch.width = imgData.width;
+            scratch.height = imgData.height;
+            scratch.getContext('2d').putImageData(imgData, 0, 0);
+
             const ctx = c.getContext('2d');
-            ctx.putImageData(imgData, 0, 0);
+            ctx.save();
+            switch (normalized) {
+                case 2:
+                    ctx.translate(c.width, 0);
+                    ctx.scale(-1, 1);
+                    break;
+                case 3:
+                    ctx.translate(c.width, c.height);
+                    ctx.rotate(Math.PI);
+                    break;
+                case 4:
+                    ctx.translate(0, c.height);
+                    ctx.scale(1, -1);
+                    break;
+                case 5:
+                    ctx.rotate(0.5 * Math.PI);
+                    ctx.scale(1, -1);
+                    break;
+                case 6:
+                    ctx.translate(c.width, 0);
+                    ctx.rotate(0.5 * Math.PI);
+                    break;
+                case 7:
+                    ctx.translate(c.width, c.height);
+                    ctx.rotate(0.5 * Math.PI);
+                    ctx.scale(-1, 1);
+                    break;
+                case 8:
+                    ctx.translate(0, c.height);
+                    ctx.rotate(-0.5 * Math.PI);
+                    break;
+            }
+            ctx.drawImage(scratch, 0, 0);
+            ctx.restore();
         }
 
         function renderDiff(id, img1, img2, mode = 'idct') {
