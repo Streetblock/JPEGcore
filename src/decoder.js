@@ -601,9 +601,57 @@
                                     return diff;
                                 };
 
-                                // First arithmetic milestone: consume real per-block DC bits and write DC coefficients.
-                                // AC entropy path remains pending.
+                                const decodeArithmeticAcBlock = (blockOffset, c) => {
+                                    const acCtx = arithmeticState.acBandContextByType[c.type];
+                                    const acCond = arithmeticState.acConditioningByTable[c.acTbl];
+                                    const kx = acCond && acCond.Kx ? acCond.Kx : 5;
+                                    let k = 1;
+                                    while (k < 64) {
+                                        // Band significance decision for current zig-zag index.
+                                        const sigState = arithmeticDecoder.createContextState(0, acCtx[k - 1]);
+                                        const significant = arithmeticDecoder.decodeBit(sigState);
+                                        acCtx[k - 1] = sigState.idx;
+                                        if (significant === STAT_MARKER || significant === STAT_RST || significant === null) return significant;
+                                        if (significant === 0) {
+                                            k++;
+                                            continue;
+                                        }
+
+                                        // Sign decision (predict from current sign when available; default MPS=0).
+                                        const signState = arithmeticDecoder.createContextState(0, acCtx[k - 1]);
+                                        const signBit = arithmeticDecoder.decodeBit(signState);
+                                        acCtx[k - 1] = signState.idx;
+                                        if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
+
+                                        // Magnitude class, bounded by DAC Kx.
+                                        let magClass = 0;
+                                        while (magClass < kx) {
+                                            const magState = arithmeticDecoder.createContextState(0, acCtx[k - 1]);
+                                            const inc = arithmeticDecoder.decodeBit(magState);
+                                            acCtx[k - 1] = magState.idx;
+                                            if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
+                                            if (inc === 0) break;
+                                            magClass++;
+                                        }
+
+                                        let magnitude = 1 + magClass;
+                                        let extra = magClass;
+                                        while (extra-- > 0) {
+                                            const b = arithmeticDecoder.decodeBypassBit();
+                                            if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                            magnitude = (magnitude << 1) | b;
+                                        }
+
+                                        const value = signBit ? -magnitude : magnitude;
+                                        coeff[blockOffset + zig[k]] = value;
+                                        k++;
+                                    }
+                                    return 0;
+                                };
+
+                                // Arithmetic milestone: consume DC and an initial AC pass with context state.
                                 let dcBlocksDecoded = 0;
+                                let acBlocksDecoded = 0;
                                 let arithmeticStopStatus = null;
                                 outerArithmeticLoop:
                                 for (let m = 0; m < cols * rows; m++) {
@@ -625,13 +673,20 @@
                                         predDC[c.type] += diff;
                                         coeff[blockOffset] = predDC[c.type];
                                         dcBlocksDecoded++;
+
+                                        const acStatus = decodeArithmeticAcBlock(blockOffset, c);
+                                        if (acStatus === STAT_MARKER || acStatus === STAT_RST || acStatus === null) {
+                                            arithmeticStopStatus = acStatus;
+                                            break outerArithmeticLoop;
+                                        }
+                                        acBlocksDecoded++;
                                     }
                                 }
 
                                 if (arithmeticStopStatus !== null) {
-                                    throw new Error(`Arithmetic JPEG DC stage interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}).`);
+                                    throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}).`);
                                 }
-                                throw new Error(`Arithmetic JPEG DC stage wired, AC entropy pending (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, compCtx DC=${dcCompContexts}, AC=${acCompContexts}, restartIntervalMCUs=${restartIntervalMCUs}, dcBlocksDecoded=${dcBlocksDecoded}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
+                                throw new Error(`Arithmetic JPEG staged DC+AC path wired, entropy model pending full spec parity (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, compCtx DC=${dcCompContexts}, AC=${acCompContexts}, restartIntervalMCUs=${restartIntervalMCUs}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
                             }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
