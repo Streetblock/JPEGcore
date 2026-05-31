@@ -55,6 +55,13 @@ async function main() {
   assert.equal(alphaOk, true, "decoded alpha should be opaque");
   assert.equal(nonZeroSeen, true, "decoded RGB should not be all zero");
 
+  const strictCore = loadCore(repoRoot).JpegCORE;
+  strictCore.Config.strictArithmeticDecode = true;
+  await assert.rejects(
+    () => strictCore.JpegJsCompat.decode(bytes),
+    /strict mode|arithmetic jpeg/i
+  );
+
   console.log("Arithmetic JPEG fixture test passed.");
 }
 

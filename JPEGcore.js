@@ -14,7 +14,8 @@
 
 const JpegCORE = {
     Config: {
-        nativeProgressiveDecode: false
+        nativeProgressiveDecode: false,
+        strictArithmeticDecode: false
     },
     // --- 1. CONSTANTS ---
     Constants: {
@@ -1139,9 +1140,14 @@ const JpegCORE = {
                                     const compCtx = arithmeticState.dcMagnitudeContextByType[c.type];
                                     const compState = arithmeticState.compStateByType[c.type];
                                     const cond = arithmeticState.dcConditioningByTable[c.dcTbl];
+                                    const prevMag = Math.abs(compState.lastDcDiff | 0);
+                                    const low = Math.max(0, cond.L | 0);
+                                    const high = Math.max(low, cond.U | 0);
+                                    const magClassPrev = prevMag === 0 ? 0 : (prevMag <= low ? 1 : (prevMag <= high ? 2 : 3));
 
                                     // Context 0: zero/non-zero decision
-                                    const zeroCtx = arithmeticDecoder.createContextState(0, compCtx[0]);
+                                    const zeroCtxIdx = (compCtx[0] + magClassPrev) & 0x3f;
+                                    const zeroCtx = arithmeticDecoder.createContextState(0, zeroCtxIdx);
                                     const nonZero = arithmeticDecoder.decodeBit(zeroCtx);
                                     compCtx[0] = zeroCtx.idx;
                                     if (nonZero === STAT_MARKER || nonZero === STAT_RST || nonZero === null) return nonZero;
@@ -1296,6 +1302,9 @@ const JpegCORE = {
 
                                 if (arithmeticStopStatus !== null && arithmeticStopStatus !== STAT_MARKER) {
                                     throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
+                                }
+                                if (JpegCORE.Config.strictArithmeticDecode) {
+                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
                                 }
                                 // Arithmetic staged path completed for this scan.
                                 // Keep marker parser aligned for potential following segments/scans.
