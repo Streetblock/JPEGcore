@@ -42,6 +42,7 @@ async function main() {
     assert.ok(table.Kx >= 1 && table.Kx <= 63, "AC conditioning Kx out of range");
   }
 
+  JpegCORE.Config.strictArithmeticDecode = false;
   const decoded = await JpegCORE.JpegJsCompat.decode(bytes);
   assert.ok(decoded.width > 0, "decoded width should be > 0");
   assert.ok(decoded.height > 0, "decoded height should be > 0");

@@ -1,4 +1,5 @@
     Config: {
         nativeProgressiveDecode: false,
-        strictArithmeticDecode: false
+        strictArithmeticDecode: true,
+        arithmeticTraceLimit: 128
     },

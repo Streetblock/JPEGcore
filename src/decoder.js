@@ -540,6 +540,13 @@
                                 const acStateTables = Object.keys(arithmeticState.acStatsByTable).length;
                                 const dcCompContexts = Object.keys(arithmeticState.dcMagnitudeContextByType).length;
                                 const acCompContexts = Object.keys(arithmeticState.acBandContextByType).length;
+                                const traceLimit = (JpegCORE.Config.arithmeticTraceLimit | 0) > 0 ? (JpegCORE.Config.arithmeticTraceLimit | 0) : 0;
+                                const arithmeticTrace = [];
+                                const pushTrace = (entry) => {
+                                    if (traceLimit <= 0) return;
+                                    if (arithmeticTrace.length >= traceLimit) return;
+                                    arithmeticTrace.push(entry);
+                                };
                                 reader.pos = sosEnd;
                                 const arithmeticDecoder = new ArithmeticDecoder(reader);
                                 const initStatus = arithmeticDecoder.initialize();
@@ -579,6 +586,7 @@
                                     zeroCtx.idx = zeroCtxIdx;
                                     const nonZero = arithmeticDecoder.decodeBit(zeroCtx);
                                     writePackedCtx(compCtx, 0, zeroCtx);
+                                    pushTrace({ phase: "dc_zero", comp: c.type, dcTbl: c.dcTbl, idx: zeroCtx.idx, mps: zeroCtx.mps, bit: nonZero, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                     if (nonZero === STAT_MARKER || nonZero === STAT_RST || nonZero === null) return nonZero;
                                     if (nonZero === 0) {
                                         compState.lastDcDiff = 0;
@@ -589,6 +597,7 @@
                                     const signCtx = readPackedCtx(compCtx, 1, (compState.lastDcDiff < 0) ? 1 : 0);
                                     const signBit = arithmeticDecoder.decodeBit(signCtx);
                                     writePackedCtx(compCtx, 1, signCtx);
+                                    pushTrace({ phase: "dc_sign", comp: c.type, dcTbl: c.dcTbl, idx: signCtx.idx, mps: signCtx.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                     if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
 
                                     // Context 2: magnitude class growth, clipped by U.
@@ -597,6 +606,7 @@
                                         const classCtx = readPackedCtx(compCtx, 2, 0);
                                         const inc = arithmeticDecoder.decodeBit(classCtx);
                                         writePackedCtx(compCtx, 2, classCtx);
+                                        pushTrace({ phase: "dc_mag_inc", comp: c.type, dcTbl: c.dcTbl, idx: classCtx.idx, mps: classCtx.mps, bit: inc, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
                                         if (inc === 0) break;
                                         magClass++;
@@ -609,6 +619,7 @@
                                         const magBitState = readPackedCtx(compCtx, 3, 0);
                                         const b = arithmeticDecoder.decodeBit(magBitState);
                                         writePackedCtx(compCtx, 3, magBitState);
+                                        pushTrace({ phase: "dc_mag_bit", comp: c.type, dcTbl: c.dcTbl, idx: magBitState.idx, mps: magBitState.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
                                         magnitude = (magnitude << 1) | b;
                                     }
@@ -628,6 +639,7 @@
                                         const eobState = readPackedCtx(acCtx, 63, 0);
                                         const eob = arithmeticDecoder.decodeBit(eobState);
                                         writePackedCtx(acCtx, 63, eobState);
+                                        pushTrace({ phase: "ac_eob", comp: c.type, acTbl: c.acTbl, k, idx: eobState.idx, mps: eobState.mps, bit: eob, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
                                         if (eob === 1) {
                                             break;
@@ -640,6 +652,7 @@
                                             const runState = readPackedCtx(acCtx, runSlot, 0);
                                             const keepZero = arithmeticDecoder.decodeBit(runState);
                                             writePackedCtx(acCtx, runSlot, runState);
+                                            pushTrace({ phase: "ac_run", comp: c.type, acTbl: c.acTbl, k, run, idx: runState.idx, mps: runState.mps, bit: keepZero, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                             if (keepZero === STAT_MARKER || keepZero === STAT_RST || keepZero === null) return keepZero;
                                             if (keepZero === 0) break;
                                             run++;
@@ -651,6 +664,7 @@
                                         const signState = readPackedCtx(acCtx, k - 1, 0);
                                         const signBit = arithmeticDecoder.decodeBit(signState);
                                         writePackedCtx(acCtx, k - 1, signState);
+                                        pushTrace({ phase: "ac_sign", comp: c.type, acTbl: c.acTbl, k, idx: signState.idx, mps: signState.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
 
                                         // Magnitude class, bounded by DAC Kx.
@@ -659,6 +673,7 @@
                                             const magState = readPackedCtx(acCtx, k - 1, 0);
                                             const inc = arithmeticDecoder.decodeBit(magState);
                                             writePackedCtx(acCtx, k - 1, magState);
+                                            pushTrace({ phase: "ac_mag_inc", comp: c.type, acTbl: c.acTbl, k, idx: magState.idx, mps: magState.mps, bit: inc, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                             if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
                                             if (inc === 0) break;
                                             magClass++;
@@ -670,6 +685,7 @@
                                             const magBitState = readPackedCtx(acCtx, k - 1, 0);
                                             const b = arithmeticDecoder.decodeBit(magBitState);
                                             writePackedCtx(acCtx, k - 1, magBitState);
+                                            pushTrace({ phase: "ac_mag_bit", comp: c.type, acTbl: c.acTbl, k, idx: magBitState.idx, mps: magBitState.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                             if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
                                             magnitude = (magnitude << 1) | b;
                                         }
@@ -758,7 +774,8 @@
                                     throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
                                 }
                                 if (JpegCORE.Config.strictArithmeticDecode) {
-                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
+                                    const traceMsg = arithmeticTrace.length ? ` trace=${JSON.stringify(arithmeticTrace.slice(0, 8))}` : "";
+                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).${traceMsg}`);
                                 }
                                 // Arithmetic staged path completed for this scan.
                                 // Keep marker parser aligned for potential following segments/scans.
