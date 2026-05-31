@@ -633,7 +633,8 @@
                                     // Context 2: magnitude class growth, clipped by U.
                                     const magGrowSlot = 2 + Math.min(magClassPrev, 3);
                                     let magClass = 0;
-                                    while (magClass < cond.U) {
+                                    const magClassCap = Math.max(0, high - low);
+                                    while (magClass < magClassCap) {
                                         const classCtx = readPackedCtx(compCtx, magGrowSlot, 0);
                                         const inc = arithmeticDecoder.decodeBit(classCtx);
                                         writePackedCtx(compCtx, magGrowSlot, classCtx);
