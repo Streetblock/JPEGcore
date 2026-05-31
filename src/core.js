@@ -3,5 +3,5 @@
         strictArithmeticDecode: false,
         arithmeticTraceLimit: 4096,
         arithmeticDcVariant: "C",
-        arithmeticAcVariant: "E"
+        arithmeticAcVariant: "D"
     },
