@@ -329,30 +329,9 @@
                         if (!acConditioningByTable[c.acTbl]) {
                             acConditioningByTable[c.acTbl] = arithmeticTables.ac[c.acTbl] || { Kx: 5 };
                         }
-                        if (!compStateByType[c.type]) {
-                            compStateByType[c.type] = { lastDcDiff: 0, lastAcSign: 0 };
-                        }
-                        if (!dcMagnitudeContextByType[c.type]) {
-                            // Stage layout:
-                            // 0: zero/non-zero
-                            // 1: sign
-                            // 2..5: mag-class growth by previous magnitude class bucket
-                            // 6..7: magnitude bits by previous magnitude class bucket
-                            dcMagnitudeContextByType[c.type] = new Uint8Array(8);
-                        }
-                        if (!acBandContextByType[c.type]) {
-                            // Packed AC context bank layout:
-                            // 0..62   : significance slots by zig-zag band
-                            // 63      : EOB decision
-                            // 64..79  : run-growth slots
-                            // 269..272: run class routing slots
-                            // 273..276: EOB buckets by k-range (variant D)
-                            // 277..331: mag-inc stage buckets (variant F)
-                            // 80..142 : sign slots by band
-                            // 143..205: magnitude-growth slots by band
-                            // 206..268: magnitude-bit slots by band
-                            acBandContextByType[c.type] = new Uint8Array(332);
-                        }
+                        if (!compStateByType[c.type]) compStateByType[c.type] = { lastDcVal: 0, dcContext: 0 };
+                        if (!dcMagnitudeContextByType[c.type]) dcMagnitudeContextByType[c.type] = new Uint8Array(64);
+                        if (!acBandContextByType[c.type]) acBandContextByType[c.type] = new Uint8Array(256);
                     }
 
                     return {
@@ -362,7 +341,8 @@
                         dcConditioningByTable,
                         acConditioningByTable,
                         dcMagnitudeContextByType,
-                        acBandContextByType
+                        acBandContextByType,
+                        fixedBin: new Uint8Array([113 & 0x7f])
                     };
                 };
 
@@ -604,122 +584,153 @@
                                 const writePackedCtx = (bank, slot, state) => {
                                     bank[slot] = (((state.mps & 1) << 7) | (state.idx & 0x7f)) & 0xff;
                                 };
-                                // Annex D decision map (work-in-progress parity scaffold):
-                                // keep all arithmetic context slot allocations centralized here,
-                                // so decoder logic can be matched decision-by-decision.
-                                const ANNEX_D_CTX = {
-                                    dc: {
-                                        zeroByPrevClass: [0, 1, 2, 3], // S0 class by previous |diff|
-                                        signPositivePred: 4,
-                                        signNegativePred: 5,
-                                        magByClass: [6, 7, 8, 9]
-                                    },
-                                    ac: {
-                                        eobByK: (k) => k,      // 1..63
-                                        sigByK: (k) => 64 + k, // 65..127
-                                        signByK: (k) => 128 + k, // 129..191
-                                        magByClass: [192, 193, 194, 195]
-                                    }
-                                };
-
                                 const decodeArithmeticDcDiff = (c) => {
-                                    const compCtx = arithmeticState.dcMagnitudeContextByType[c.type];
                                     const compState = arithmeticState.compStateByType[c.type];
+                                    const stats = arithmeticState.dcStatsByTable[c.dcTbl];
                                     const cond = arithmeticState.dcConditioningByTable[c.dcTbl];
-                                    const prevMag = Math.abs(compState.lastDcDiff | 0);
-                                    let s0Class = 0;
-                                    if (prevMag === 1) s0Class = 1;
-                                    else if (prevMag === 2) s0Class = 2;
-                                    else if (prevMag > 2) s0Class = 3;
-                                    const s0CtxIndex = ANNEX_D_CTX.dc.zeroByPrevClass[s0Class];
+                                    let stIndex = compState.dcContext | 0;
 
-                                    const zeroCtx = readPackedCtx(compCtx, s0CtxIndex, 0);
-                                    const nonZero = arithmeticDecoder.decodeBit(zeroCtx);
-                                    writePackedCtx(compCtx, s0CtxIndex, zeroCtx);
-                                    pushTrace({ phase: "dc_zero", annex: "D.3", decision: "S0", comp: c.type, dcTbl: c.dcTbl, idx: zeroCtx.idx, mps: zeroCtx.mps, bit: nonZero, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                    if (nonZero === STAT_MARKER || nonZero === STAT_RST || nonZero === null) return nonZero;
-                                    if (nonZero === 0) {
-                                        compState.lastDcDiff = 0;
+                                    const s0 = readPackedCtx(stats, stIndex, 0);
+                                    const nz = arithmeticDecoder.decodeBit(s0);
+                                    writePackedCtx(stats, stIndex, s0);
+                                    pushTrace({ phase: "dc_zero", annex: "F.19", decision: "S0", comp: c.type, dcTbl: c.dcTbl, idx: s0.idx, mps: s0.mps, bit: nz, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    if (nz === STAT_MARKER || nz === STAT_RST || nz === null) return nz;
+                                    if (nz === 0) {
+                                        compState.dcContext = 0;
                                         return 0;
                                     }
 
-                                    const signCtxIndex = (compState.lastDcDiff < 0)
-                                        ? ANNEX_D_CTX.dc.signNegativePred
-                                        : ANNEX_D_CTX.dc.signPositivePred;
-                                    const signCtx = readPackedCtx(compCtx, signCtxIndex, 0);
-                                    const signBit = arithmeticDecoder.decodeBit(signCtx);
-                                    writePackedCtx(compCtx, signCtxIndex, signCtx);
-                                    pushTrace({ phase: "dc_sign", annex: "D.3", decision: "SS", comp: c.type, dcTbl: c.dcTbl, idx: signCtx.idx, mps: signCtx.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                    if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
+                                    const sSign = readPackedCtx(stats, stIndex + 1, 0);
+                                    const sign = arithmeticDecoder.decodeBit(sSign);
+                                    writePackedCtx(stats, stIndex + 1, sSign);
+                                    pushTrace({ phase: "dc_sign", annex: "F.22", decision: "SS", comp: c.type, dcTbl: c.dcTbl, idx: sSign.idx, mps: sSign.mps, bit: sign, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    if (sign === STAT_MARKER || sign === STAT_RST || sign === null) return sign;
 
-                                    let magClass = 0;
-                                    let magnitude = 1;
-                                    const high = Math.max(0, (cond && cond.U) | 0);
-                                    while (magClass < high) {
-                                        const magCtxIndex = ANNEX_D_CTX.dc.magByClass[Math.min(magClass, 3)];
-                                        const magCtx = readPackedCtx(compCtx, magCtxIndex, 0);
-                                        const bit = arithmeticDecoder.decodeBit(magCtx);
-                                        writePackedCtx(compCtx, magCtxIndex, magCtx);
-                                        pushTrace({ phase: "dc_mag_inc", annex: "D.3", decision: "SP", comp: c.type, dcTbl: c.dcTbl, idx: magCtx.idx, mps: magCtx.mps, bit, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        if (bit === STAT_MARKER || bit === STAT_RST || bit === null) return bit;
-                                        if (bit === 0) break;
-                                        magClass++;
-                                        magnitude = (magnitude << 1) | bit;
+                                    stIndex += 2 + (sign ? 1 : 0);
+                                    const sClass = readPackedCtx(stats, stIndex, 0);
+                                    let m = arithmeticDecoder.decodeBit(sClass);
+                                    writePackedCtx(stats, stIndex, sClass);
+                                    pushTrace({ phase: "dc_mag_class", annex: "F.23", decision: "SP", comp: c.type, dcTbl: c.dcTbl, idx: sClass.idx, mps: sClass.mps, bit: m, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    if (m === STAT_MARKER || m === STAT_RST || m === null) return m;
+
+                                    if (m) {
+                                        stIndex = 20;
+                                        while (true) {
+                                            const sGrow = readPackedCtx(stats, stIndex, 0);
+                                            const b = arithmeticDecoder.decodeBit(sGrow);
+                                            writePackedCtx(stats, stIndex, sGrow);
+                                            pushTrace({ phase: "dc_mag_grow", annex: "F.23", decision: "X1", comp: c.type, dcTbl: c.dcTbl, idx: sGrow.idx, mps: sGrow.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                            if (!b) break;
+                                            m <<= 1;
+                                            stIndex += 1;
+                                            if (m === 0x8000) break;
+                                        }
                                     }
 
-                                    const diff = signBit ? -magnitude : magnitude;
-                                    compState.lastDcDiff = diff;
-                                    return diff;
+                                    const low = Math.max(0, (cond && cond.L) | 0);
+                                    const high = Math.max(low, (cond && cond.U) | 0);
+                                    const lowThr = (1 << low) >> 1;
+                                    const highThr = (1 << high) >> 1;
+                                    if (m < lowThr) compState.dcContext = 0;
+                                    else if (m > highThr) compState.dcContext = 12 + (sign ? 4 : 0);
+                                    else compState.dcContext = 4 + (sign ? 4 : 0);
+
+                                    let v = m;
+                                    stIndex += 14;
+                                    while (m >>= 1) {
+                                        const sBit = readPackedCtx(stats, stIndex, 0);
+                                        const b = arithmeticDecoder.decodeBit(sBit);
+                                        writePackedCtx(stats, stIndex, sBit);
+                                        pushTrace({ phase: "dc_mag_bits", annex: "F.24", decision: "V", comp: c.type, dcTbl: c.dcTbl, idx: sBit.idx, mps: sBit.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                        if (b) v |= m;
+                                    }
+
+                                    v += 1;
+                                    if (sign) v = -v;
+                                    compState.lastDcVal = (compState.lastDcVal + v) | 0;
+                                    return v;
                                 };
 
                                 const decodeArithmeticAcBlock = (blockOffset, c) => {
-                                    const acCtx = arithmeticState.acBandContextByType[c.type];
+                                    const stats = arithmeticState.acStatsByTable[c.acTbl];
+                                    const fixed = arithmeticState.fixedBin;
                                     const acCond = arithmeticState.acConditioningByTable[c.acTbl];
                                     const kx = acCond && acCond.Kx ? acCond.Kx : 5;
                                     let k = 1;
                                     while (k < 64) {
-                                        const eobCtxIndex = ANNEX_D_CTX.ac.eobByK(k);
-                                        const eobState = readPackedCtx(acCtx, eobCtxIndex, 0);
-                                        const eobBit = arithmeticDecoder.decodeBit(eobState);
-                                        writePackedCtx(acCtx, eobCtxIndex, eobState);
-                                        pushTrace({ phase: "ac_eob", annex: "D.6", decision: "EOB", comp: c.type, acTbl: c.acTbl, k, idx: eobState.idx, mps: eobState.mps, bit: eobBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        if (eobBit === STAT_MARKER || eobBit === STAT_RST || eobBit === null) return eobBit;
-                                        if (eobBit === 1) break;
+                                        let stIndex = 3 * (k - 1);
+                                        const sEob = readPackedCtx(stats, stIndex, 0);
+                                        const eob = arithmeticDecoder.decodeBit(sEob);
+                                        writePackedCtx(stats, stIndex, sEob);
+                                        pushTrace({ phase: "ac_eob", annex: "F.20", decision: "EOB", comp: c.type, acTbl: c.acTbl, k, idx: sEob.idx, mps: sEob.mps, bit: eob, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
+                                        if (eob) break;
 
-                                        const sigCtxIndex = ANNEX_D_CTX.ac.sigByK(k);
-                                        const sigState = readPackedCtx(acCtx, sigCtxIndex, 0);
-                                        const sigBit = arithmeticDecoder.decodeBit(sigState);
-                                        writePackedCtx(acCtx, sigCtxIndex, sigState);
-                                        pushTrace({ phase: "ac_sig", annex: "D.6", decision: "SN", comp: c.type, acTbl: c.acTbl, k, idx: sigState.idx, mps: sigState.mps, bit: sigBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        if (sigBit === STAT_MARKER || sigBit === STAT_RST || sigBit === null) return sigBit;
-                                        if (sigBit === 0) {
+                                        let reachedSpectralEnd = false;
+                                        while (true) {
+                                            const sSn = readPackedCtx(stats, stIndex + 1, 0);
+                                            const sn = arithmeticDecoder.decodeBit(sSn);
+                                            writePackedCtx(stats, stIndex + 1, sSn);
+                                            pushTrace({ phase: "ac_sig", annex: "F.20", decision: "SN", comp: c.type, acTbl: c.acTbl, k, idx: sSn.idx, mps: sSn.mps, bit: sn, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (sn === STAT_MARKER || sn === STAT_RST || sn === null) return sn;
+                                            if (sn) break;
+                                            stIndex += 3;
                                             k++;
-                                            continue;
+                                            if (k >= 64) { reachedSpectralEnd = true; break; }
+                                        }
+                                        if (reachedSpectralEnd) break;
+
+                                        const sSign = readPackedCtx(fixed, 0, 0);
+                                        const sign = arithmeticDecoder.decodeBit(sSign);
+                                        writePackedCtx(fixed, 0, sSign);
+                                        pushTrace({ phase: "ac_sign", annex: "F.22", decision: "S", comp: c.type, acTbl: c.acTbl, k, idx: sSign.idx, mps: sSign.mps, bit: sign, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (sign === STAT_MARKER || sign === STAT_RST || sign === null) return sign;
+
+                                        stIndex += 2;
+                                        const sClass = readPackedCtx(stats, stIndex, 0);
+                                        let m = arithmeticDecoder.decodeBit(sClass);
+                                        writePackedCtx(stats, stIndex, sClass);
+                                        pushTrace({ phase: "ac_mag_class", annex: "F.23", decision: "SP", comp: c.type, acTbl: c.acTbl, k, idx: sClass.idx, mps: sClass.mps, bit: m, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (m === STAT_MARKER || m === STAT_RST || m === null) return m;
+                                        if (m) {
+                                            const sX = readPackedCtx(stats, stIndex, 0);
+                                            const x = arithmeticDecoder.decodeBit(sX);
+                                            writePackedCtx(stats, stIndex, sX);
+                                            pushTrace({ phase: "ac_mag_x", annex: "F.23", decision: "X", comp: c.type, acTbl: c.acTbl, k, idx: sX.idx, mps: sX.mps, bit: x, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (x === STAT_MARKER || x === STAT_RST || x === null) return x;
+                                            if (x) {
+                                                m <<= 1;
+                                                stIndex = (k <= kx) ? 189 : 217;
+                                                while (true) {
+                                                    const sGrow = readPackedCtx(stats, stIndex, 0);
+                                                    const b = arithmeticDecoder.decodeBit(sGrow);
+                                                    writePackedCtx(stats, stIndex, sGrow);
+                                                    pushTrace({ phase: "ac_mag_grow", annex: "F.23", decision: "X1", comp: c.type, acTbl: c.acTbl, k, idx: sGrow.idx, mps: sGrow.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                    if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                                    if (!b) break;
+                                                    m <<= 1;
+                                                    stIndex += 1;
+                                                    if (m === 0x8000) break;
+                                                }
+                                            }
                                         }
 
-                                        const signCtxIndex = ANNEX_D_CTX.ac.signByK(k);
-                                        const signState = readPackedCtx(acCtx, signCtxIndex, 0);
-                                        const signBit = arithmeticDecoder.decodeBit(signState);
-                                        writePackedCtx(acCtx, signCtxIndex, signState);
-                                        pushTrace({ phase: "ac_sign", annex: "D.6", decision: "S", comp: c.type, acTbl: c.acTbl, k, idx: signState.idx, mps: signState.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
-
-                                        let magClass = 0;
-                                        let magnitude = 1;
-                                        while (magClass < kx) {
-                                            const magCtxIndex = ANNEX_D_CTX.ac.magByClass[Math.min(magClass, 3)];
-                                            const magState = readPackedCtx(acCtx, magCtxIndex, 0);
-                                            const bit = arithmeticDecoder.decodeBit(magState);
-                                            writePackedCtx(acCtx, magCtxIndex, magState);
-                                            pushTrace({ phase: "ac_mag_inc", annex: "D.6", decision: "X", comp: c.type, acTbl: c.acTbl, k, idx: magState.idx, mps: magState.mps, bit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                            if (bit === STAT_MARKER || bit === STAT_RST || bit === null) return bit;
-                                            if (bit === 0) break;
-                                            magClass++;
-                                            magnitude = (magnitude << 1) | bit;
+                                        let v = m;
+                                        stIndex += 14;
+                                        while (m >>= 1) {
+                                            const sBit = readPackedCtx(stats, stIndex, 0);
+                                            const b = arithmeticDecoder.decodeBit(sBit);
+                                            writePackedCtx(stats, stIndex, sBit);
+                                            pushTrace({ phase: "ac_mag_bits", annex: "F.24", decision: "V", comp: c.type, acTbl: c.acTbl, k, idx: sBit.idx, mps: sBit.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                            if (b) v |= m;
                                         }
 
-                                        const value = signBit ? -magnitude : magnitude;
-                                        coeff[blockOffset + zig[k]] = value;
+                                        v += 1;
+                                        if (sign) v = -v;
+                                        coeff[blockOffset + zig[k]] = v;
                                         k++;
                                     }
                                     return 0;
@@ -734,8 +745,8 @@
                                 const resetArithmeticRestartState = () => {
                                     predDC[0] = 0; predDC[1] = 0; predDC[2] = 0;
                                     for (const compType of Object.keys(arithmeticState.compStateByType)) {
-                                        arithmeticState.compStateByType[compType].lastDcDiff = 0;
-                                        arithmeticState.compStateByType[compType].lastAcSign = 0;
+                                        arithmeticState.compStateByType[compType].lastDcVal = 0;
+                                        arithmeticState.compStateByType[compType].dcContext = 0;
                                     }
                                     for (const tbl of Object.keys(arithmeticState.dcStatsByTable)) {
                                         arithmeticState.dcStatsByTable[tbl].fill(0);
