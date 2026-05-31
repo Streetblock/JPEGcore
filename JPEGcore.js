@@ -1278,6 +1278,17 @@ const JpegCORE = {
                                         k += run;
                                         if (k >= 64) break;
 
+                                        // Significance decision for the selected band position.
+                                        const sigState = readPackedCtx(acCtx, sigSlot(k), 0);
+                                        const significant = arithmeticDecoder.decodeBit(sigState);
+                                        writePackedCtx(acCtx, sigSlot(k), sigState);
+                                        pushTrace({ phase: "ac_sig", comp: c.type, acTbl: c.acTbl, k, idx: sigState.idx, mps: sigState.mps, bit: significant, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (significant === STAT_MARKER || significant === STAT_RST || significant === null) return significant;
+                                        if (significant === 0) {
+                                            k++;
+                                            continue;
+                                        }
+
                                         // Sign decision (predict from current sign when available; default MPS=0).
                                         const signState = readPackedCtx(acCtx, signSlot(k), 0);
                                         const signBit = arithmeticDecoder.decodeBit(signState);
