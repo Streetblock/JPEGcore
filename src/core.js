@@ -1,7 +1,7 @@
     Config: {
         nativeProgressiveDecode: false,
-        strictArithmeticDecode: true,
-        arithmeticTraceLimit: 128,
+        strictArithmeticDecode: false,
+        arithmeticTraceLimit: 4096,
         arithmeticDcVariant: "C",
         arithmeticAcVariant: "E"
     },
