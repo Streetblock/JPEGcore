@@ -730,7 +730,7 @@
 
                                         v += 1;
                                         if (sign) v = -v;
-                                        coeff[blockOffset + zig[k]] = v;
+                                        coeff[blockOffset + zig[k]] = v << Al;
                                         k++;
                                     }
                                     return 0;
@@ -742,7 +742,13 @@
                                 let arithmeticStopStatus = null;
                                 let rstEvents = 0;
                                 let mcusSinceRestart = 0;
-                                const resetArithmeticRestartState = () => {
+                                const resetArithmeticRestartState = (consumeMarker = false) => {
+                                    if (consumeMarker && arithmeticDecoder && typeof arithmeticDecoder.consumeRestartMarker === "function") {
+                                        arithmeticDecoder.consumeRestartMarker();
+                                    }
+                                    if (arithmeticDecoder && typeof arithmeticDecoder.resetForRestart === "function") {
+                                        arithmeticDecoder.resetForRestart();
+                                    }
                                     predDC[0] = 0; predDC[1] = 0; predDC[2] = 0;
                                     for (const compType of Object.keys(arithmeticState.compStateByType)) {
                                         arithmeticState.compStateByType[compType].lastDcVal = 0;
@@ -775,7 +781,7 @@
                                             const diff = decodeArithmeticDcDiff(c);
                                             if (diff === STAT_RST) {
                                                 rstEvents++;
-                                                resetArithmeticRestartState();
+                                                resetArithmeticRestartState(true);
                                                 continue;
                                             }
                                             if (diff === STAT_MARKER || diff === null) {
@@ -783,13 +789,13 @@
                                                 break outerArithmeticLoop;
                                             }
                                             predDC[c.type] += diff;
-                                            coeff[blockOffset] = predDC[c.type];
+                                            coeff[blockOffset] = predDC[c.type] << Al;
                                             dcBlocksDecoded++;
 
                                             const acStatus = decodeArithmeticAcBlock(blockOffset, c);
                                             if (acStatus === STAT_RST) {
                                                 rstEvents++;
-                                                resetArithmeticRestartState();
+                                                resetArithmeticRestartState(true);
                                                 continue;
                                             }
                                             if (acStatus === STAT_MARKER || acStatus === null) {

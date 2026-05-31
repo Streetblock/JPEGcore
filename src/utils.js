@@ -363,6 +363,31 @@
                 return 0;
             }
 
+            resetForRestart() {
+                // Mirror libjpeg-style restart resync for arithmetic coder registers.
+                this.c = 0;
+                this.a = 0;
+                this.ct = -16;
+                this.initialized = false;
+                this.entropyByte = 0;
+                this.entropyBitsLeft = 0;
+            }
+
+            consumeRestartMarker() {
+                const d = this.reader.d;
+                let p = this.reader.pos | 0;
+                while (p < d.length && d[p] !== 0xff) p++;
+                if (p >= d.length) return false;
+                while (p < d.length && d[p] === 0xff) p++;
+                if (p >= d.length) return false;
+                const code = d[p];
+                if (code >= 0xd0 && code <= 0xd7) {
+                    this.reader.pos = p + 1;
+                    return true;
+                }
+                return false;
+            }
+
             _renorm() {
                 while (this.a < 0x8000) {
                     const inBit = this._nextEntropyBit();
