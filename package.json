@@ -26,6 +26,8 @@
   "scripts": {
     "build": "node scripts/build-core.js",
     "pretest": "npm run build",
-    "test": "node tests/smoke.test.js && node tests/arithmetic-fixture.test.js"
+    "test": "node tests/smoke.test.js && node tests/arithmetic-fixture.test.js",
+    "trace:export": "node scripts/arith-trace-export.js",
+    "trace:diff": "node scripts/arith-trace-diff.js"
   }
 }
