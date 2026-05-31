@@ -1290,10 +1290,16 @@ const JpegCORE = {
                                     }
                                 }
 
-                                if (arithmeticStopStatus !== null) {
+                                if (arithmeticStopStatus !== null && arithmeticStopStatus !== STAT_MARKER) {
                                     throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
                                 }
-                                throw new Error(`Arithmetic JPEG staged DC+AC path wired, entropy model pending full spec parity (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, compCtx DC=${dcCompContexts}, AC=${acCompContexts}, restartIntervalMCUs=${restartIntervalMCUs}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
+                                // Arithmetic staged path completed for this scan.
+                                // Keep marker parser aligned for potential following segments/scans.
+                                pos = reader.pos;
+                                if (pos > 0 && pos < d.length && d[pos] !== 0xFF && d[pos - 1] === 0xFF) {
+                                    pos--;
+                                }
+                                continue;
                             }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen

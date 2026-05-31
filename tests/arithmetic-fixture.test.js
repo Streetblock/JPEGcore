@@ -42,12 +42,18 @@ async function main() {
     assert.ok(table.Kx >= 1 && table.Kx <= 63, "AC conditioning Kx out of range");
   }
 
-  // Current baseline expectation for this branch:
-  // arithmetic-coded JPEG is not decoded yet and should fail cleanly.
-  await assert.rejects(
-    () => JpegCORE.JpegJsCompat.decode(bytes),
-    /arithmetic jpeg|unsupported|invalid|decode/i
-  );
+  const decoded = await JpegCORE.JpegJsCompat.decode(bytes);
+  assert.ok(decoded.width > 0, "decoded width should be > 0");
+  assert.ok(decoded.height > 0, "decoded height should be > 0");
+  assert.equal(decoded.data.length, decoded.width * decoded.height * 4, "decoded RGBA length mismatch");
+  let alphaOk = true;
+  let nonZeroSeen = false;
+  for (let i = 0; i < decoded.data.length; i += 4) {
+    if (decoded.data[i + 3] !== 255) alphaOk = false;
+    if (decoded.data[i] || decoded.data[i + 1] || decoded.data[i + 2]) nonZeroSeen = true;
+  }
+  assert.equal(alphaOk, true, "decoded alpha should be opaque");
+  assert.equal(nonZeroSeen, true, "decoded RGB should not be all zero");
 
   console.log("Arithmetic JPEG fixture test passed.");
 }
