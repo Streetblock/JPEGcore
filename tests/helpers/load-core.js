@@ -34,7 +34,7 @@ class TestImageData {
   }
 }
 
-function loadCore(repoRoot = path.resolve(__dirname, "..", ".."), extraGlobals = {}) {
+function loadCore(repoRoot = path.resolve(__dirname, "..", "..")) {
   const sourcePath = path.join(repoRoot, "JPEGcore.js");
   const source = fs.readFileSync(sourcePath, "utf8");
   const context = {
@@ -53,8 +53,7 @@ function loadCore(repoRoot = path.resolve(__dirname, "..", ".."), extraGlobals =
     FileReader: class FileReader {},
     ImageData: TestImageData,
     atob: (b64) => Buffer.from(b64, "base64").toString("binary"),
-    btoa: (str) => Buffer.from(str, "binary").toString("base64"),
-    ...extraGlobals
+    btoa: (str) => Buffer.from(str, "binary").toString("base64")
   };
 
   vm.createContext(context);

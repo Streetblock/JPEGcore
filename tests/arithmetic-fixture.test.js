@@ -38,34 +38,6 @@ async function main() {
     /unsupported|invalid|decode/i
   );
 
-  // Native arithmetic fallback path should work when explicitly enabled.
-  const fallbackPixels = new Uint8ClampedArray([12, 34, 56, 255]);
-  const fallbackCore = loadCore(repoRoot, {
-    createImageBitmap: async () => ({
-      width: 1,
-      height: 1,
-      close() {}
-    }),
-    OffscreenCanvas: class MockOffscreenCanvas {
-      constructor(width, height) {
-        this.width = width;
-        this.height = height;
-      }
-      getContext() {
-        return {
-          drawImage() {},
-          getImageData: () => ({ data: fallbackPixels })
-        };
-      }
-    }
-  }).JpegCORE;
-
-  fallbackCore.Config.nativeArithmeticDecode = true;
-  const decoded = await fallbackCore.JpegJsCompat.decode(bytes);
-  assert.equal(decoded.width, 1);
-  assert.equal(decoded.height, 1);
-  assert.deepEqual(Array.from(decoded.data), Array.from(fallbackPixels));
-
   console.log("Arithmetic JPEG fixture test passed.");
 }
 

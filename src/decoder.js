@@ -352,16 +352,13 @@
                     throw new Error(`Bildmaße zu groß: ${w}x${h}`);
                 }
 
-                if (isArithmetic && !JpegCORE.Config.nativeArithmeticDecode) {
-                    throw new Error("Arithmetic-coded JPEG is not supported without nativeArithmeticDecode fallback.");
+                if (isArithmetic) {
+                    throw new Error("Arithmetic-coded JPEG is not supported.");
                 }
 
-                // Progressive/Arithmetic fallback:
+                // Progressive fallback:
                 // Prefer native browser decoding path (no external dependency).
-                const shouldUseNativeFallback =
-                    (isProgressive && JpegCORE.Config.nativeProgressiveDecode) ||
-                    (isArithmetic && JpegCORE.Config.nativeArithmeticDecode);
-                if (shouldUseNativeFallback) {
+                if (isProgressive && JpegCORE.Config.nativeProgressiveDecode) {
                     const hasCreateImageBitmap = (typeof createImageBitmap === 'function');
                     const hasOffscreenCanvas = (typeof OffscreenCanvas !== 'undefined');
                     const hasDomCanvas = (typeof document !== 'undefined' && typeof document.createElement === 'function');
@@ -382,8 +379,7 @@
                                     mode: 'RGBA_NATIVE',
                                     quantTables: {},
                                     compMap: [],
-                                    isProgressiveFallback: isProgressive,
-                                    isArithmeticFallback: isArithmetic,
+                                    isProgressiveFallback: true,
                                     decodeBackend: 'native'
                                 };
                             }

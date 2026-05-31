@@ -1,4 +1,3 @@
     Config: {
-        nativeProgressiveDecode: false,
-        nativeArithmeticDecode: false
+        nativeProgressiveDecode: false
     },
