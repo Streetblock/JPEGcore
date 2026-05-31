@@ -18,7 +18,7 @@ const JpegCORE = {
         strictArithmeticDecode: false,
         arithmeticTraceLimit: 4096,
         arithmeticDcVariant: "C",
-        arithmeticAcVariant: "H"
+        arithmeticAcVariant: "D"
     },
     // --- 1. CONSTANTS ---
     Constants: {
@@ -1242,16 +1242,34 @@ const JpegCORE = {
                                 const writePackedCtx = (bank, slot, state) => {
                                     bank[slot] = (((state.mps & 1) << 7) | (state.idx & 0x7f)) & 0xff;
                                 };
+                                // Annex D decision map (work-in-progress parity scaffold):
+                                // keep all arithmetic context slot allocations centralized here,
+                                // so decoder logic can be matched decision-by-decision.
+                                const ANNEX_D_CTX = {
+                                    dc: {
+                                        zeroByPrevClass: [0, 1, 2, 3], // S0 class by previous |diff|
+                                        signPositivePred: 4,
+                                        signNegativePred: 5,
+                                        magByClass: [6, 7, 8, 9]
+                                    },
+                                    ac: {
+                                        eobByK: (k) => k,      // 1..63
+                                        sigByK: (k) => 64 + k, // 65..127
+                                        signByK: (k) => 128 + k, // 129..191
+                                        magByClass: [192, 193, 194, 195]
+                                    }
+                                };
 
                                 const decodeArithmeticDcDiff = (c) => {
                                     const compCtx = arithmeticState.dcMagnitudeContextByType[c.type];
                                     const compState = arithmeticState.compStateByType[c.type];
                                     const cond = arithmeticState.dcConditioningByTable[c.dcTbl];
                                     const prevMag = Math.abs(compState.lastDcDiff | 0);
-                                    let s0CtxIndex = 0;
-                                    if (prevMag === 1) s0CtxIndex = 1;
-                                    else if (prevMag === 2) s0CtxIndex = 2;
-                                    else if (prevMag > 2) s0CtxIndex = 3;
+                                    let s0Class = 0;
+                                    if (prevMag === 1) s0Class = 1;
+                                    else if (prevMag === 2) s0Class = 2;
+                                    else if (prevMag > 2) s0Class = 3;
+                                    const s0CtxIndex = ANNEX_D_CTX.dc.zeroByPrevClass[s0Class];
 
                                     const zeroCtx = readPackedCtx(compCtx, s0CtxIndex, 0);
                                     const nonZero = arithmeticDecoder.decodeBit(zeroCtx);
@@ -1263,7 +1281,9 @@ const JpegCORE = {
                                         return 0;
                                     }
 
-                                    const signCtxIndex = (compState.lastDcDiff < 0) ? 5 : 4;
+                                    const signCtxIndex = (compState.lastDcDiff < 0)
+                                        ? ANNEX_D_CTX.dc.signNegativePred
+                                        : ANNEX_D_CTX.dc.signPositivePred;
                                     const signCtx = readPackedCtx(compCtx, signCtxIndex, 0);
                                     const signBit = arithmeticDecoder.decodeBit(signCtx);
                                     writePackedCtx(compCtx, signCtxIndex, signCtx);
@@ -1274,7 +1294,7 @@ const JpegCORE = {
                                     let magnitude = 1;
                                     const high = Math.max(0, (cond && cond.U) | 0);
                                     while (magClass < high) {
-                                        const magCtxIndex = 6 + Math.min(magClass, 3);
+                                        const magCtxIndex = ANNEX_D_CTX.dc.magByClass[Math.min(magClass, 3)];
                                         const magCtx = readPackedCtx(compCtx, magCtxIndex, 0);
                                         const bit = arithmeticDecoder.decodeBit(magCtx);
                                         writePackedCtx(compCtx, magCtxIndex, magCtx);
@@ -1296,7 +1316,7 @@ const JpegCORE = {
                                     const kx = acCond && acCond.Kx ? acCond.Kx : 5;
                                     let k = 1;
                                     while (k < 64) {
-                                        const eobCtxIndex = k;
+                                        const eobCtxIndex = ANNEX_D_CTX.ac.eobByK(k);
                                         const eobState = readPackedCtx(acCtx, eobCtxIndex, 0);
                                         const eobBit = arithmeticDecoder.decodeBit(eobState);
                                         writePackedCtx(acCtx, eobCtxIndex, eobState);
@@ -1304,7 +1324,7 @@ const JpegCORE = {
                                         if (eobBit === STAT_MARKER || eobBit === STAT_RST || eobBit === null) return eobBit;
                                         if (eobBit === 1) break;
 
-                                        const sigCtxIndex = 64 + k;
+                                        const sigCtxIndex = ANNEX_D_CTX.ac.sigByK(k);
                                         const sigState = readPackedCtx(acCtx, sigCtxIndex, 0);
                                         const sigBit = arithmeticDecoder.decodeBit(sigState);
                                         writePackedCtx(acCtx, sigCtxIndex, sigState);
@@ -1315,7 +1335,7 @@ const JpegCORE = {
                                             continue;
                                         }
 
-                                        const signCtxIndex = 128 + k;
+                                        const signCtxIndex = ANNEX_D_CTX.ac.signByK(k);
                                         const signState = readPackedCtx(acCtx, signCtxIndex, 0);
                                         const signBit = arithmeticDecoder.decodeBit(signState);
                                         writePackedCtx(acCtx, signCtxIndex, signState);
@@ -1325,7 +1345,7 @@ const JpegCORE = {
                                         let magClass = 0;
                                         let magnitude = 1;
                                         while (magClass < kx) {
-                                            const magCtxIndex = 192 + Math.min(magClass, 3);
+                                            const magCtxIndex = ANNEX_D_CTX.ac.magByClass[Math.min(magClass, 3)];
                                             const magState = readPackedCtx(acCtx, magCtxIndex, 0);
                                             const bit = arithmeticDecoder.decodeBit(magState);
                                             writePackedCtx(acCtx, magCtxIndex, magState);
