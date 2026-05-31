@@ -35,7 +35,7 @@ async function main() {
   // arithmetic-coded JPEG is not decoded yet and should fail cleanly.
   await assert.rejects(
     () => JpegCORE.JpegJsCompat.decode(bytes),
-    /unsupported|invalid|decode/i
+    /arithmetic-coded jpeg is not supported yet|unsupported|invalid|decode/i
   );
 
   console.log("Arithmetic JPEG fixture test passed.");

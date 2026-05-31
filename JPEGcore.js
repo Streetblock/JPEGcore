@@ -611,6 +611,7 @@ const JpegCORE = {
                 // STATUS CODES
                 const STAT_MARKER = -1;
                 const STAT_RST = -2;
+                const arithmeticTables = { dc: {}, ac: {} };
 
                 // --- Robust Bit Reader Instanz ---
                 // Wir erstellen den Reader. Er bekommt das Daten-Array 'd'.
@@ -714,6 +715,25 @@ const JpegCORE = {
                 const quantTables = {};
 
                 if (d[0] === 0xFF && d[1] === M.SOI) pos = 2;
+                const parseDacSegment = (start, end) => {
+                    let subPos = start;
+                    while (subPos + 1 < end) {
+                        const tableClassAndId = d[subPos++];
+                        const conditioning = d[subPos++];
+                        const tc = (tableClassAndId >> 4) & 0x0F;
+                        const tb = tableClassAndId & 0x0F;
+                        if (tb > 3) continue;
+
+                        if (tc === 0) {
+                            const L = (conditioning >> 4) & 0x0F;
+                            const U = conditioning & 0x0F;
+                            arithmeticTables.dc[tb] = { L, U };
+                        } else if (tc === 1) {
+                            const Kx = conditioning & 0x1F;
+                            arithmeticTables.ac[tb] = { Kx };
+                        }
+                    }
+                };
 
                 while (pos < d.length - 1) {
                     if (d[pos] !== 0xFF) { pos++; continue; }
@@ -772,6 +792,8 @@ const JpegCORE = {
                             for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10;
                             quantTables[id] = naturalTbl;
                         }
+                    } else if (marker === M.DAC) {
+                        parseDacSegment(pos + 3, segmentEnd);
                     }
                     pos = segmentEnd;
                 }
@@ -782,7 +804,9 @@ const JpegCORE = {
                 }
 
                 if (isArithmetic) {
-                    throw new Error("Arithmetic-coded JPEG is not supported.");
+                    const dcCount = Object.keys(arithmeticTables.dc).length;
+                    const acCount = Object.keys(arithmeticTables.ac).length;
+                    throw new Error(`Arithmetic-coded JPEG is not supported yet (DAC parsed: DC=${dcCount}, AC=${acCount}).`);
                 }
 
                 // Progressive fallback:
@@ -1134,6 +1158,11 @@ const JpegCORE = {
                                 tables[tc][th] = makeTree(nr, val);
                             }
                             pos = end;
+                        } else if (marker === M.DAC) {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            if (pos + 1 + len > d.length) break;
+                            parseDacSegment(pos + 3, pos + 1 + len);
+                            pos += 1 + len;
                         } else if (marker === M.EOI) { break; }
                         else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
                     }
@@ -1142,6 +1171,9 @@ const JpegCORE = {
                 return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, decodeBackend: 'internal' };
 
             } catch (globalErr) {
+                if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic-coded JPEG is not supported yet")) {
+                    throw globalErr;
+                }
                 console.error("Critical Decoder Failure:", globalErr);
                 return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
             }
