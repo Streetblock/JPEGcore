@@ -825,12 +825,6 @@ const JpegCORE = {
                     throw new Error(`Bildmaße zu groß: ${w}x${h}`);
                 }
 
-                if (isArithmetic) {
-                    const dcCount = Object.keys(arithmeticTables.dc).length;
-                    const acCount = Object.keys(arithmeticTables.ac).length;
-                    throw new Error(`Arithmetic-coded JPEG is not supported yet (DAC parsed: DC=${dcCount}, AC=${acCount}).`);
-                }
-
                 // Progressive fallback:
                 // Prefer native browser decoding path (no external dependency).
                 if (isProgressive && JpegCORE.Config.nativeProgressiveDecode) {
@@ -924,6 +918,26 @@ const JpegCORE = {
                             const kStart = (Ss > 1) ? Ss : 1;
                             const coeff = coeffBuffer;
                             const zig = ZZ;
+
+                            if (isArithmetic) {
+                                const dcCount = Object.keys(arithmeticTables.dc).length;
+                                const acCount = Object.keys(arithmeticTables.ac).length;
+                                const isSequential = (Ss === 0 && Se === 63 && Ah === 0 && Al === 0);
+                                if (!isSequential) {
+                                    throw new Error(`Arithmetic JPEG scan mode not supported yet (Ss=${Ss}, Se=${Se}, Ah=${Ah}, Al=${Al}; DAC DC=${dcCount}, AC=${acCount}).`);
+                                }
+
+                                for (const c of comps) {
+                                    if (!arithmeticTables.dc[c.dcTbl]) {
+                                        throw new Error(`Arithmetic JPEG missing DC conditioning table ${c.dcTbl} for component type ${c.type}.`);
+                                    }
+                                    if (!arithmeticTables.ac[c.acTbl]) {
+                                        throw new Error(`Arithmetic JPEG missing AC conditioning table ${c.acTbl} for component type ${c.type}.`);
+                                    }
+                                }
+
+                                throw new Error(`Arithmetic JPEG sequential scan wiring ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}).`);
+                            }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
                             reader.pos= sosEnd;
@@ -1188,12 +1202,17 @@ const JpegCORE = {
                         } else if (marker === M.EOI) { break; }
                         else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
                     }
-                } catch (e) { console.warn("Robust Decode Warning:", e); }
+                } catch (e) {
+                    if (e && typeof e.message === "string" && e.message.includes("Arithmetic JPEG")) {
+                        throw e;
+                    }
+                    console.warn("Robust Decode Warning:", e);
+                }
 
                 return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, decodeBackend: 'internal' };
 
             } catch (globalErr) {
-                if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic-coded JPEG is not supported yet")) {
+                if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic JPEG")) {
                     throw globalErr;
                 }
                 console.error("Critical Decoder Failure:", globalErr);
