@@ -633,8 +633,12 @@
                                     const magGrowSlot = 2 + Math.min(magClassPrev, 3);
                                     let magClass = 0;
                                     const magClassCap = Math.max(0, high - low);
+                                    const dcVariant = String(JpegCORE.Config.arithmeticDcVariant || "A").toUpperCase();
+                                    const magIncSeedMps = (dcVariant === "B")
+                                        ? ((prevMag > high) ? 1 : 0)
+                                        : 0;
                                     while (magClass < magClassCap) {
-                                        const classCtx = readPackedCtx(compCtx, magGrowSlot, 0);
+                                        const classCtx = readPackedCtx(compCtx, magGrowSlot, magIncSeedMps);
                                         const inc = arithmeticDecoder.decodeBit(classCtx);
                                         writePackedCtx(compCtx, magGrowSlot, classCtx);
                                         pushTrace({ phase: "dc_mag_inc", comp: c.type, dcTbl: c.dcTbl, idx: classCtx.idx, mps: classCtx.mps, bit: inc, k: magClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
