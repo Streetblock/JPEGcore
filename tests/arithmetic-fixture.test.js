@@ -66,6 +66,7 @@ async function main() {
       assert.match(msg, /strict mode|arithmetic jpeg/i);
       assert.match(msg, /step=\d+/i);
       assert.match(msg, /phase=/i);
+      assert.match(msg, /traceLimitHit=/i);
       assert.match(msg, /trace=\[/i);
       assert.match(msg, /focus=\[/i);
       throw err;

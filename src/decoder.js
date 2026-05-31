@@ -346,10 +346,11 @@
                             // 63      : EOB decision
                             // 64..79  : run-growth slots
                             // 269..272: run class routing slots
+                            // 273..276: EOB buckets by k-range (variant D)
                             // 80..142 : sign slots by band
                             // 143..205: magnitude-growth slots by band
                             // 206..268: magnitude-bit slots by band
-                            acBandContextByType[c.type] = new Uint8Array(273);
+                            acBandContextByType[c.type] = new Uint8Array(277);
                         }
                     }
 
@@ -675,17 +676,30 @@
                                     const acCtx = arithmeticState.acBandContextByType[c.type];
                                     const acCond = arithmeticState.acConditioningByTable[c.acTbl];
                                     const compState = arithmeticState.compStateByType[c.type];
+                                    const acVariant = String(JpegCORE.Config.arithmeticAcVariant || "A").toUpperCase();
                                     const kx = acCond && acCond.Kx ? acCond.Kx : 5;
                                     const sigSlot = (kk) => (kk - 1);
                                     const signSlot = (kk) => (80 + (kk - 1));
                                     const magIncSlot = (kk) => (143 + (kk - 1));
                                     const magBitSlot = (kk) => (206 + (kk - 1));
+                                    const eobSlot = (kk) => {
+                                        if (acVariant !== "D") return 63;
+                                        if (kk <= 8) return 273;
+                                        if (kk <= 24) return 274;
+                                        if (kk <= 40) return 275;
+                                        return 276;
+                                    };
                                     let k = 1;
                                     while (k < 64) {
                                         // EOB decision for remaining band.
-                                        const eobState = readPackedCtx(acCtx, 63, 0);
+                                        const eobSeedMps = (acVariant === "B")
+                                            ? ((c.type === 0) ? 0 : ((compState.lastAcSign ? 1 : 0)))
+                                            : ((acVariant === "C")
+                                                ? ((c.type === 0) ? 0 : 1)
+                                                : 0);
+                                        const eobState = readPackedCtx(acCtx, eobSlot(k), eobSeedMps);
                                         const eob = arithmeticDecoder.decodeBit(eobState);
-                                        writePackedCtx(acCtx, 63, eobState);
+                                        writePackedCtx(acCtx, eobSlot(k), eobState);
                                         pushTrace({ phase: "ac_eob", comp: c.type, acTbl: c.acTbl, k, idx: eobState.idx, mps: eobState.mps, bit: eob, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                         if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
                                         if (eob === 1) {
@@ -855,12 +869,14 @@
                                 }
                                 if (JpegCORE.Config.strictArithmeticDecode) {
                                     const last = arithmeticTrace.length ? arithmeticTrace[arithmeticTrace.length - 1] : null;
+                                    const traceLimit = Math.max(1, (JpegCORE.Config.arithmeticTraceLimit | 0) || 128);
+                                    const traceLimitHit = arithmeticTrace.length >= traceLimit;
                                     const where = last
                                         ? ` step=${arithmeticTrace.length} phase=${last.phase} comp=${last.comp}${(typeof last.k === "number") ? ` k=${last.k}` : ""}${(typeof last.run === "number") ? ` run=${last.run}` : ""}`
                                         : ` step=0`;
                                     const preview = arithmeticTrace.length ? ` trace=[${compactTrace(6)}]` : "";
                                     const focus = arithmeticTrace.length ? ` focus=[${traceWindow(arithmeticTrace.length, 4)}]` : "";
-                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (${where}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).${preview}${focus}`);
+                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (${where}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}, traceLimit=${traceLimit}, traceLimitHit=${traceLimitHit}).${preview}${focus}`);
                                 }
                                 // Arithmetic staged path completed for this scan.
                                 // Keep marker parser aligned for potential following segments/scans.

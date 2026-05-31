@@ -31,7 +31,7 @@ async function main() {
     errMsg = String((err && err.message) || err || "");
   }
 
-  const m = errMsg.match(/trace=\[(.*)\]\s*$/s);
+  const m = errMsg.match(/trace=\[(.*?)\](?:\s+focus=\[.*\])?\s*$/s);
   if (!m) {
     throw new Error(`Trace not found in strict decode error.\nMessage:\n${errMsg}`);
   }
@@ -53,4 +53,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

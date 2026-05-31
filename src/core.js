@@ -2,5 +2,6 @@
         nativeProgressiveDecode: false,
         strictArithmeticDecode: true,
         arithmeticTraceLimit: 128,
-        arithmeticDcVariant: "C"
+        arithmeticDcVariant: "C",
+        arithmeticAcVariant: "A"
     },
