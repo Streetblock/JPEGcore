@@ -349,6 +349,8 @@ const JpegCORE = {
                 this.entropyByte = 0;
                 this.entropyBitsLeft = 0;
                 this.unreadMarker = 0;
+                this.unreadMarkerFFPos = -1;
+                this.unreadMarkerCodePos = -1;
             }
 
             createContextState(initialMps = 0, initialIdx = 0) {
@@ -384,6 +386,8 @@ const JpegCORE = {
                 this.reader.reset();
                 this.entropyBitsLeft = 0;
                 this.unreadMarker = 0;
+                this.unreadMarkerFFPos = -1;
+                this.unreadMarkerCodePos = -1;
                 this.c = 0;
                 this.a = 0;
                 this.ct = -16;
@@ -399,9 +403,19 @@ const JpegCORE = {
                 this.initialized = false;
                 this.entropyByte = 0;
                 this.entropyBitsLeft = 0;
+                this.unreadMarker = 0;
+                this.unreadMarkerFFPos = -1;
+                this.unreadMarkerCodePos = -1;
             }
 
             consumeRestartMarker() {
+                if (this.unreadMarker >= 0xd0 && this.unreadMarker <= 0xd7 && this.unreadMarkerCodePos >= 0) {
+                    this.reader.pos = this.unreadMarkerCodePos + 1;
+                    this.unreadMarker = 0;
+                    this.unreadMarkerFFPos = -1;
+                    this.unreadMarkerCodePos = -1;
+                    return true;
+                }
                 const d = this.reader.d;
                 let p = this.reader.pos | 0;
                 while (p < d.length && d[p] !== 0xff) p++;
@@ -411,6 +425,9 @@ const JpegCORE = {
                 const code = d[p];
                 if (code >= 0xd0 && code <= 0xd7) {
                     this.reader.pos = p + 1;
+                    this.unreadMarker = 0;
+                    this.unreadMarkerFFPos = -1;
+                    this.unreadMarkerCodePos = -1;
                     return true;
                 }
                 return false;
@@ -424,6 +441,7 @@ const JpegCORE = {
                             data = this._byteInRaw();
                             if (data === null) return null;
                             if (data === 0xff) {
+                                const ffPos = (this.reader.pos - 1) | 0;
                                 do {
                                     data = this._byteInRaw();
                                     if (data === null) return null;
@@ -431,6 +449,8 @@ const JpegCORE = {
                                 if (data === 0x00) data = 0xff;
                                 else {
                                     this.unreadMarker = data;
+                                    this.unreadMarkerFFPos = ffPos;
+                                    this.unreadMarkerCodePos = (this.reader.pos - 1) | 0;
                                     data = 0;
                                 }
                             }
@@ -458,6 +478,8 @@ const JpegCORE = {
                     const st = this.initialize();
                     if (st === null || st < 0) return st;
                 }
+                const preRenorm = this._renorm();
+                if (preRenorm === null || preRenorm < 0) return preRenorm;
                 const qe = this.getQeEntry(contextState.idx | 0);
                 const qev = qe.qe >>> 0;
                 let svMps = contextState.mps ? 1 : 0;
@@ -492,9 +514,16 @@ const JpegCORE = {
                     decodedBit = svMps;
                 }
 
-                const renormStatus = this._renorm();
-                if (renormStatus === null || renormStatus < 0) return renormStatus;
                 return decodedBit;
+            }
+
+            getUnreadMarkerInfo() {
+                if (!this.unreadMarker) return null;
+                return {
+                    marker: this.unreadMarker,
+                    ffPos: this.unreadMarkerFFPos,
+                    codePos: this.unreadMarkerCodePos
+                };
             }
         }
     },
@@ -1313,11 +1342,6 @@ const JpegCORE = {
                                 if (!arithmeticDecoder.initialized) {
                                     throw new Error("Arithmetic JPEG init failed (decoder not initialized).");
                                 }
-                                const sanityCtx = arithmeticDecoder.createContextState(0, 0);
-                                const sanityBit = arithmeticDecoder.decodeBit(sanityCtx);
-                                if (sanityBit === STAT_MARKER || sanityBit === STAT_RST || sanityBit === null) {
-                                    throw new Error(`Arithmetic JPEG context read failed (status=${sanityBit}).`);
-                                }
                                 const readPackedCtx = (bank, slot, defaultMps = 0) => {
                                     const packed = bank[slot] | 0;
                                     const mps = (packed >> 7) & 1;
@@ -1575,6 +1599,12 @@ const JpegCORE = {
                                 // Arithmetic staged path completed for this scan.
                                 // Keep marker parser aligned for potential following segments/scans.
                                 pos = reader.pos;
+                                const unread = (arithmeticDecoder && typeof arithmeticDecoder.getUnreadMarkerInfo === "function")
+                                    ? arithmeticDecoder.getUnreadMarkerInfo()
+                                    : null;
+                                if (unread && typeof unread.ffPos === "number" && unread.ffPos >= 0) {
+                                    pos = unread.ffPos;
+                                }
                                 if (pos > 0 && pos < d.length && d[pos] !== 0xFF && d[pos - 1] === 0xFF) {
                                     pos--;
                                 }

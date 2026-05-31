@@ -570,11 +570,6 @@
                                 if (!arithmeticDecoder.initialized) {
                                     throw new Error("Arithmetic JPEG init failed (decoder not initialized).");
                                 }
-                                const sanityCtx = arithmeticDecoder.createContextState(0, 0);
-                                const sanityBit = arithmeticDecoder.decodeBit(sanityCtx);
-                                if (sanityBit === STAT_MARKER || sanityBit === STAT_RST || sanityBit === null) {
-                                    throw new Error(`Arithmetic JPEG context read failed (status=${sanityBit}).`);
-                                }
                                 const readPackedCtx = (bank, slot, defaultMps = 0) => {
                                     const packed = bank[slot] | 0;
                                     const mps = (packed >> 7) & 1;
@@ -832,6 +827,12 @@
                                 // Arithmetic staged path completed for this scan.
                                 // Keep marker parser aligned for potential following segments/scans.
                                 pos = reader.pos;
+                                const unread = (arithmeticDecoder && typeof arithmeticDecoder.getUnreadMarkerInfo === "function")
+                                    ? arithmeticDecoder.getUnreadMarkerInfo()
+                                    : null;
+                                if (unread && typeof unread.ffPos === "number" && unread.ffPos >= 0) {
+                                    pos = unread.ffPos;
+                                }
                                 if (pos > 0 && pos < d.length && d[pos] !== 0xFF && d[pos - 1] === 0xFF) {
                                     pos--;
                                 }

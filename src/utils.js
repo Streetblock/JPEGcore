@@ -297,6 +297,8 @@
                 this.entropyByte = 0;
                 this.entropyBitsLeft = 0;
                 this.unreadMarker = 0;
+                this.unreadMarkerFFPos = -1;
+                this.unreadMarkerCodePos = -1;
             }
 
             createContextState(initialMps = 0, initialIdx = 0) {
@@ -332,6 +334,8 @@
                 this.reader.reset();
                 this.entropyBitsLeft = 0;
                 this.unreadMarker = 0;
+                this.unreadMarkerFFPos = -1;
+                this.unreadMarkerCodePos = -1;
                 this.c = 0;
                 this.a = 0;
                 this.ct = -16;
@@ -347,9 +351,19 @@
                 this.initialized = false;
                 this.entropyByte = 0;
                 this.entropyBitsLeft = 0;
+                this.unreadMarker = 0;
+                this.unreadMarkerFFPos = -1;
+                this.unreadMarkerCodePos = -1;
             }
 
             consumeRestartMarker() {
+                if (this.unreadMarker >= 0xd0 && this.unreadMarker <= 0xd7 && this.unreadMarkerCodePos >= 0) {
+                    this.reader.pos = this.unreadMarkerCodePos + 1;
+                    this.unreadMarker = 0;
+                    this.unreadMarkerFFPos = -1;
+                    this.unreadMarkerCodePos = -1;
+                    return true;
+                }
                 const d = this.reader.d;
                 let p = this.reader.pos | 0;
                 while (p < d.length && d[p] !== 0xff) p++;
@@ -359,6 +373,9 @@
                 const code = d[p];
                 if (code >= 0xd0 && code <= 0xd7) {
                     this.reader.pos = p + 1;
+                    this.unreadMarker = 0;
+                    this.unreadMarkerFFPos = -1;
+                    this.unreadMarkerCodePos = -1;
                     return true;
                 }
                 return false;
@@ -372,6 +389,7 @@
                             data = this._byteInRaw();
                             if (data === null) return null;
                             if (data === 0xff) {
+                                const ffPos = (this.reader.pos - 1) | 0;
                                 do {
                                     data = this._byteInRaw();
                                     if (data === null) return null;
@@ -379,6 +397,8 @@
                                 if (data === 0x00) data = 0xff;
                                 else {
                                     this.unreadMarker = data;
+                                    this.unreadMarkerFFPos = ffPos;
+                                    this.unreadMarkerCodePos = (this.reader.pos - 1) | 0;
                                     data = 0;
                                 }
                             }
@@ -406,6 +426,8 @@
                     const st = this.initialize();
                     if (st === null || st < 0) return st;
                 }
+                const preRenorm = this._renorm();
+                if (preRenorm === null || preRenorm < 0) return preRenorm;
                 const qe = this.getQeEntry(contextState.idx | 0);
                 const qev = qe.qe >>> 0;
                 let svMps = contextState.mps ? 1 : 0;
@@ -440,9 +462,16 @@
                     decodedBit = svMps;
                 }
 
-                const renormStatus = this._renorm();
-                if (renormStatus === null || renormStatus < 0) return renormStatus;
                 return decodedBit;
+            }
+
+            getUnreadMarkerInfo() {
+                if (!this.unreadMarker) return null;
+                return {
+                    marker: this.unreadMarker,
+                    ffPos: this.unreadMarkerFFPos,
+                    codePos: this.unreadMarkerCodePos
+                };
             }
         }
     },
