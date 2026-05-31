@@ -103,6 +103,16 @@ async function main() {
   assert.equal(exifProbe.detectedMode, "420");
   assert.equal(exifProbe.detectedOrientation, 6);
 
+  const progressiveBytes = readFixture("is-progressive-progressive.jpg");
+  const progressiveProbe = await JpegCORE.Analysis.probe(new TestBlob([progressiveBytes]));
+  assert.equal(progressiveProbe.detectedMode, "444");
+  assert.equal(progressiveProbe.detectedProgressive, true);
+  const progressiveDecoded = await JpegCORE.JpegJsCompat.decode(progressiveBytes, {
+    useTArray: true,
+    formatAsRGBA: true
+  });
+  assertDecodedImage(progressiveDecoded, 200, 133);
+
   console.log("JPEG fixture decode tests passed.");
 }
 

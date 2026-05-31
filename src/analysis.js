@@ -106,7 +106,7 @@
                 const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
-                let infoStr = "", detectedSamp = '420';
+                let infoStr = "", detectedSamp = '420', detectedProgressive = false;
                 let detectedOrientation = null;
                 const rawHuff = { 0: {}, 1: {} };
 
@@ -119,6 +119,7 @@
                             const len = (d[pos + 2] << 8) | d[pos + 3];
                             const fullSegment = d.slice(pos, pos + 2 + len);
                             if (type === M.SOF0 || type === M.SOF2) {
+                                detectedProgressive = (type === M.SOF2);
                                 const numComps = d[pos + 9];
                                 const ySamp = d[pos + 11];
                                 if (numComps === 1) detectedSamp = 'GRAY';
@@ -178,6 +179,7 @@
                 return {
                     detectedMode: detectedSamp,
                     detectedHuffman: foundCustom ? extractedHuff : null,
+                    detectedProgressive: detectedProgressive,
                     detectedMetaSegments: meta,
                     detectedOrientation: detectedOrientation,
                     customQtL: qtL,
