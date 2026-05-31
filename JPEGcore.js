@@ -1233,8 +1233,17 @@ const JpegCORE = {
                                 let dcBlocksDecoded = 0;
                                 let acBlocksDecoded = 0;
                                 let arithmeticStopStatus = null;
+                                let rstEvents = 0;
+                                let mcusSinceRestart = 0;
+                                const resetArithmeticRestartState = () => {
+                                    predDC[0] = 0; predDC[1] = 0; predDC[2] = 0;
+                                    for (const compType of Object.keys(arithmeticState.compStateByType)) {
+                                        arithmeticState.compStateByType[compType].lastDcDiff = 0;
+                                    }
+                                };
                                 outerArithmeticLoop:
                                 for (let m = 0; m < cols * rows; m++) {
+                                    let mcuDone = false;
                                     for (const c of comps) {
                                         let blockIndex = -1;
                                         for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
@@ -1246,7 +1255,12 @@ const JpegCORE = {
                                         if (blockOffset + 64 > coeff.length) break outerArithmeticLoop;
 
                                         const diff = decodeArithmeticDcDiff(c);
-                                        if (diff === STAT_MARKER || diff === STAT_RST || diff === null) {
+                                        if (diff === STAT_RST) {
+                                            rstEvents++;
+                                            resetArithmeticRestartState();
+                                            continue;
+                                        }
+                                        if (diff === STAT_MARKER || diff === null) {
                                             arithmeticStopStatus = diff;
                                             break outerArithmeticLoop;
                                         }
@@ -1255,18 +1269,31 @@ const JpegCORE = {
                                         dcBlocksDecoded++;
 
                                         const acStatus = decodeArithmeticAcBlock(blockOffset, c);
-                                        if (acStatus === STAT_MARKER || acStatus === STAT_RST || acStatus === null) {
+                                        if (acStatus === STAT_RST) {
+                                            rstEvents++;
+                                            resetArithmeticRestartState();
+                                            continue;
+                                        }
+                                        if (acStatus === STAT_MARKER || acStatus === null) {
                                             arithmeticStopStatus = acStatus;
                                             break outerArithmeticLoop;
                                         }
                                         acBlocksDecoded++;
+                                        mcuDone = true;
+                                    }
+                                    if (mcuDone && restartIntervalMCUs > 0) {
+                                        mcusSinceRestart++;
+                                        if (mcusSinceRestart >= restartIntervalMCUs) {
+                                            resetArithmeticRestartState();
+                                            mcusSinceRestart = 0;
+                                        }
                                     }
                                 }
 
                                 if (arithmeticStopStatus !== null) {
-                                    throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}).`);
+                                    throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
                                 }
-                                throw new Error(`Arithmetic JPEG staged DC+AC path wired, entropy model pending full spec parity (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, compCtx DC=${dcCompContexts}, AC=${acCompContexts}, restartIntervalMCUs=${restartIntervalMCUs}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
+                                throw new Error(`Arithmetic JPEG staged DC+AC path wired, entropy model pending full spec parity (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, compCtx DC=${dcCompContexts}, AC=${acCompContexts}, restartIntervalMCUs=${restartIntervalMCUs}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
                             }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
