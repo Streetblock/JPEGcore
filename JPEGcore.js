@@ -14,7 +14,8 @@
 
 const JpegCORE = {
     Config: {
-        nativeProgressiveDecode: false
+        nativeProgressiveDecode: false,
+        nativeArithmeticDecode: false
     },
     // --- 1. CONSTANTS ---
     Constants: {
@@ -709,6 +710,7 @@ const JpegCORE = {
                 if (d.length < 2) throw new Error("File too short");
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
                 let isProgressive = false;
+                let isArithmetic = false;
                 let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
 
@@ -727,8 +729,9 @@ const JpegCORE = {
                     const segmentEnd = pos + 1 + len;
                     if (segmentEnd > d.length) break;
 
-                    if (marker === M.SOF0 || marker === M.SOF2) {
+                    if (marker === M.SOF0 || marker === M.SOF2 || marker === M.SOF9) {
                         isProgressive = (marker === M.SOF2);
+                        isArithmetic = (marker === M.SOF9);
                         h = (d[pos + 4] << 8) | d[pos + 5];
                         w = (d[pos + 6] << 8) | d[pos + 7];
                         const numComps = d[pos + 8];
@@ -779,9 +782,16 @@ const JpegCORE = {
                     throw new Error(`Bildmaße zu groß: ${w}x${h}`);
                 }
 
-                // Progressive fallback:
+                if (isArithmetic && !JpegCORE.Config.nativeArithmeticDecode) {
+                    throw new Error("Arithmetic-coded JPEG is not supported without nativeArithmeticDecode fallback.");
+                }
+
+                // Progressive/Arithmetic fallback:
                 // Prefer native browser decoding path (no external dependency).
-                if (isProgressive && JpegCORE.Config.nativeProgressiveDecode) {
+                const shouldUseNativeFallback =
+                    (isProgressive && JpegCORE.Config.nativeProgressiveDecode) ||
+                    (isArithmetic && JpegCORE.Config.nativeArithmeticDecode);
+                if (shouldUseNativeFallback) {
                     const hasCreateImageBitmap = (typeof createImageBitmap === 'function');
                     const hasOffscreenCanvas = (typeof OffscreenCanvas !== 'undefined');
                     const hasDomCanvas = (typeof document !== 'undefined' && typeof document.createElement === 'function');
@@ -802,7 +812,8 @@ const JpegCORE = {
                                     mode: 'RGBA_NATIVE',
                                     quantTables: {},
                                     compMap: [],
-                                    isProgressiveFallback: true,
+                                    isProgressiveFallback: isProgressive,
+                                    isArithmeticFallback: isArithmetic,
                                     decodeBackend: 'native'
                                 };
                             }
