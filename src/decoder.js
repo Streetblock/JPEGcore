@@ -347,10 +347,11 @@
                             // 64..79  : run-growth slots
                             // 269..272: run class routing slots
                             // 273..276: EOB buckets by k-range (variant D)
+                            // 277..331: mag-inc stage buckets (variant F)
                             // 80..142 : sign slots by band
                             // 143..205: magnitude-growth slots by band
                             // 206..268: magnitude-bit slots by band
-                            acBandContextByType[c.type] = new Uint8Array(277);
+                            acBandContextByType[c.type] = new Uint8Array(332);
                         }
                     }
 
@@ -680,7 +681,10 @@
                                     const kx = acCond && acCond.Kx ? acCond.Kx : 5;
                                     const sigSlot = (kk) => (kk - 1);
                                     const signSlot = (kk) => (80 + (kk - 1));
-                                    const magIncSlot = (kk) => (143 + (kk - 1));
+                                    const magIncSlot = (kk, stage) => {
+                                        if (acVariant !== "F") return 143 + (kk - 1);
+                                        return 277 + (Math.max(0, Math.min(2, stage | 0)) * 63) + (kk - 1);
+                                    };
                                     const magBitSlot = (kk) => (206 + (kk - 1));
                                     const eobSlot = (kk) => {
                                         if (acVariant !== "D") return 63;
@@ -767,9 +771,9 @@
                                         // Magnitude class, bounded by DAC Kx.
                                         let magClass = 0;
                                         while (magClass < kx) {
-                                            const magState = readPackedCtx(acCtx, magIncSlot(k), 0);
+                                            const magState = readPackedCtx(acCtx, magIncSlot(k, magClass), 0);
                                             const inc = arithmeticDecoder.decodeBit(magState);
-                                            writePackedCtx(acCtx, magIncSlot(k), magState);
+                                            writePackedCtx(acCtx, magIncSlot(k, magClass), magState);
                                             pushTrace({ phase: "ac_mag_inc", comp: c.type, acTbl: c.acTbl, k, idx: magState.idx, mps: magState.mps, bit: inc, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                             if (inc === STAT_MARKER || inc === STAT_RST || inc === null) return inc;
                                             if (inc === 0) break;
