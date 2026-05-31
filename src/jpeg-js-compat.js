@@ -17,6 +17,9 @@
             }
 
             const decoded = await JpegCORE.Decoder.extractBlocksStruct(blob);
+            if (!decoded.preDecodedData && (!decoded.w || !decoded.h || (!decoded.coeffBuffer && !decoded.blockList && !decoded.blocks))) {
+                throw new Error("JpegJsCompat.decode: unsupported or invalid JPEG");
+            }
             const imgData = JpegCORE.Decoder.render(decoded, 1.0);
 
             let data = imgData.data;
@@ -82,4 +85,4 @@
                 height
             };
         }
-    }
+    }
