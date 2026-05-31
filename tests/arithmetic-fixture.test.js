@@ -58,10 +58,19 @@ async function main() {
 
   const strictCore = loadCore(repoRoot).JpegCORE;
   strictCore.Config.strictArithmeticDecode = true;
-  await assert.rejects(
-    () => strictCore.JpegJsCompat.decode(bytes),
-    /strict mode|arithmetic jpeg/i
-  );
+  await assert.rejects(async () => {
+    try {
+      await strictCore.JpegJsCompat.decode(bytes);
+    } catch (err) {
+      const msg = String((err && err.message) || err || "");
+      assert.match(msg, /strict mode|arithmetic jpeg/i);
+      assert.match(msg, /step=\d+/i);
+      assert.match(msg, /phase=/i);
+      assert.match(msg, /trace=\[/i);
+      throw err;
+    }
+    throw new Error("strict mode should reject arithmetic staged decode");
+  });
 
   console.log("Arithmetic JPEG fixture test passed.");
 }
