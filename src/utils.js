@@ -228,6 +228,8 @@
                 this.a = 0x10000;
                 this.ct = 0;
                 this.initialized = false;
+                this.entropyByte = 0;
+                this.entropyBitsLeft = 0;
             }
 
             createContextState(initialMps = 0, initialIdx = 0) {
@@ -241,22 +243,52 @@
                 return table[index];
             }
 
-            _readByte() {
-                let b = this.reader.nextBit();
-                if (b === null || b < 0) return b;
-                let v = b;
-                for (let i = 0; i < 7; i++) {
-                    b = this.reader.nextBit();
-                    if (b === null || b < 0) return b;
-                    v = (v << 1) | b;
+            _byteIn() {
+                const d = this.reader.d;
+                if (this.reader.pos >= d.length) return null;
+                let b = d[this.reader.pos++];
+
+                if (b !== 0xff) return b;
+
+                // Skip fill bytes.
+                while (this.reader.pos < d.length && d[this.reader.pos] === 0xff) {
+                    this.reader.pos++;
                 }
-                return v;
+                if (this.reader.pos >= d.length) return null;
+
+                const next = d[this.reader.pos];
+                if (next === 0x00) {
+                    this.reader.pos++;
+                    return 0xff;
+                }
+                if (next >= 0xd0 && next <= 0xd7) {
+                    this.reader.pos++;
+                    return this.reader.STAT_RST;
+                }
+                if (next === 0xd9) {
+                    return null;
+                }
+                return this.reader.STAT_MARKER;
+            }
+
+            _nextEntropyBit() {
+                if (this.entropyBitsLeft <= 0) {
+                    const b = this._byteIn();
+                    if (b === null || b < 0) return b;
+                    this.entropyByte = b;
+                    this.entropyBitsLeft = 8;
+                }
+                const out = (this.entropyByte >> (this.entropyBitsLeft - 1)) & 1;
+                this.entropyBitsLeft--;
+                return out;
             }
 
             initialize() {
-                const b1 = this._readByte();
+                this.reader.reset();
+                this.entropyBitsLeft = 0;
+                const b1 = this._byteIn();
                 if (b1 === null || b1 < 0) return b1;
-                const b2 = this._readByte();
+                const b2 = this._byteIn();
                 if (b2 === null || b2 < 0) return b2;
                 this.c = (b1 << 8) | b2;
                 this.a = 0x10000;
@@ -267,7 +299,7 @@
 
             _renorm() {
                 while (this.a < 0x8000) {
-                    const inBit = this.reader.nextBit();
+                    const inBit = this._nextEntropyBit();
                     if (inBit === null || inBit < 0) return inBit;
                     this.a <<= 1;
                     this.c = ((this.c << 1) | inBit) & 0x1ffff;
@@ -277,7 +309,7 @@
 
             // Temporary placeholder until full QM-state machine is wired.
             decodeBypassBit() {
-                return this.reader.nextBit();
+                return this._nextEntropyBit();
             }
 
             // API-compatible context decode hook.
