@@ -106,7 +106,7 @@
                 const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
-                let infoStr = "", detectedSamp = '420', detectedProgressive = false;
+                let infoStr = "", detectedSamp = '420', detectedProgressive = false, detectedArithmetic = false;
                 let detectedOrientation = null;
                 const rawHuff = { 0: {}, 1: {} };
 
@@ -118,8 +118,9 @@
                         if (type >= M.SOF0 && type <= M.COM) {
                             const len = (d[pos + 2] << 8) | d[pos + 3];
                             const fullSegment = d.slice(pos, pos + 2 + len);
-                            if (type === M.SOF0 || type === M.SOF2) {
+                            if (type === M.SOF0 || type === M.SOF2 || type === M.SOF9) {
                                 detectedProgressive = (type === M.SOF2);
+                                detectedArithmetic = (type === M.SOF9);
                                 const numComps = d[pos + 9];
                                 const ySamp = d[pos + 11];
                                 if (numComps === 1) detectedSamp = 'GRAY';
@@ -149,6 +150,8 @@
                                     const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
                                     if (rawHuff[tc]) rawHuff[tc][th] = { n: nr, v: val };
                                 }
+                            } else if (type === M.DAC) {
+                                detectedArithmetic = true;
                             } else if ((type >= M.APP0 && type <= 0xEF) || type === M.COM) {
                                 meta.push(fullSegment);
                                 const label = (type === M.COM) ? "COM" : "APP" + (type - 0xE0);
@@ -180,6 +183,7 @@
                     detectedMode: detectedSamp,
                     detectedHuffman: foundCustom ? extractedHuff : null,
                     detectedProgressive: detectedProgressive,
+                    detectedArithmetic: detectedArithmetic,
                     detectedMetaSegments: meta,
                     detectedOrientation: detectedOrientation,
                     customQtL: qtL,

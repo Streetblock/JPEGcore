@@ -96,6 +96,11 @@ async function main() {
     new TestBlob([readFixture("libjpeg-turbo-testimgari.jpg")])
   );
   assert.equal(arithmeticProbe.detectedMode, "420");
+  assert.equal(arithmeticProbe.detectedArithmetic, true);
+  await assert.rejects(
+    () => JpegCORE.JpegJsCompat.decode(readFixture("libjpeg-turbo-testimgari.jpg")),
+    /unsupported or invalid JPEG/
+  );
 
   const exifProbe = await JpegCORE.Analysis.probe(
     new TestBlob([readFixture("exif-orientation-landscape-6.jpg")])
