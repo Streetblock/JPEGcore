@@ -315,19 +315,41 @@
                     const dcStatsByTable = {};
                     const acStatsByTable = {};
                     const compStateByType = {};
+                    const dcConditioningByTable = {};
+                    const acConditioningByTable = {};
+                    const dcMagnitudeContextByType = {};
+                    const acBandContextByType = {};
 
                     for (const c of compsForScan) {
                         if (!dcStatsByTable[c.dcTbl]) dcStatsByTable[c.dcTbl] = new Uint8Array(64);
                         if (!acStatsByTable[c.acTbl]) acStatsByTable[c.acTbl] = new Uint8Array(256);
+                        if (!dcConditioningByTable[c.dcTbl]) {
+                            dcConditioningByTable[c.dcTbl] = arithmeticTables.dc[c.dcTbl] || { L: 0, U: 1 };
+                        }
+                        if (!acConditioningByTable[c.acTbl]) {
+                            acConditioningByTable[c.acTbl] = arithmeticTables.ac[c.acTbl] || { Kx: 5 };
+                        }
                         if (!compStateByType[c.type]) {
                             compStateByType[c.type] = { lastDcDiff: 0 };
+                        }
+                        if (!dcMagnitudeContextByType[c.type]) {
+                            // JPEG arithmetic DC commonly uses 5 context slots per component.
+                            dcMagnitudeContextByType[c.type] = new Uint8Array(5);
+                        }
+                        if (!acBandContextByType[c.type]) {
+                            // Reserve one context slot per zig-zag AC coefficient position.
+                            acBandContextByType[c.type] = new Uint8Array(63);
                         }
                     }
 
                     return {
                         dcStatsByTable,
                         acStatsByTable,
-                        compStateByType
+                        compStateByType,
+                        dcConditioningByTable,
+                        acConditioningByTable,
+                        dcMagnitudeContextByType,
+                        acBandContextByType
                     };
                 };
 
@@ -516,6 +538,8 @@
                                 const arithmeticState = buildArithmeticScanState(comps);
                                 const dcStateTables = Object.keys(arithmeticState.dcStatsByTable).length;
                                 const acStateTables = Object.keys(arithmeticState.acStatsByTable).length;
+                                const dcCompContexts = Object.keys(arithmeticState.dcMagnitudeContextByType).length;
+                                const acCompContexts = Object.keys(arithmeticState.acBandContextByType).length;
                                 const arithmeticDecoder = new ArithmeticDecoder(reader);
                                 const initStatus = arithmeticDecoder.initialize();
                                 if (initStatus === STAT_MARKER || initStatus === STAT_RST || initStatus === null) {
@@ -529,7 +553,7 @@
                                 if (sanityBit === STAT_MARKER || sanityBit === STAT_RST || sanityBit === null) {
                                     throw new Error(`Arithmetic JPEG context read failed (status=${sanityBit}).`);
                                 }
-                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, restartIntervalMCUs=${restartIntervalMCUs}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
+                                throw new Error(`Arithmetic JPEG sequential scan core state ready, entropy decode not implemented yet (components=${comps.length}, DAC DC=${dcCount}, AC=${acCount}, state DC=${dcStateTables}, AC=${acStateTables}, compCtx DC=${dcCompContexts}, AC=${acCompContexts}, restartIntervalMCUs=${restartIntervalMCUs}, init=ok, ctxIdx=${sanityCtx.idx}, ctxMps=${sanityCtx.mps}).`);
                             }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
