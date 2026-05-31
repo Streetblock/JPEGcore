@@ -931,7 +931,7 @@ const JpegCORE = {
                             acConditioningByTable[c.acTbl] = arithmeticTables.ac[c.acTbl] || { Kx: 5 };
                         }
                         if (!compStateByType[c.type]) {
-                            compStateByType[c.type] = { lastDcDiff: 0 };
+                            compStateByType[c.type] = { lastDcDiff: 0, lastAcSign: 0 };
                         }
                         if (!dcMagnitudeContextByType[c.type]) {
                             // JPEG arithmetic DC commonly uses 5 context slots per component.
@@ -1247,6 +1247,7 @@ const JpegCORE = {
                                 const decodeArithmeticAcBlock = (blockOffset, c) => {
                                     const acCtx = arithmeticState.acBandContextByType[c.type];
                                     const acCond = arithmeticState.acConditioningByTable[c.acTbl];
+                                    const compState = arithmeticState.compStateByType[c.type];
                                     const kx = acCond && acCond.Kx ? acCond.Kx : 5;
                                     const sigSlot = (kk) => (kk - 1);
                                     const signSlot = (kk) => (80 + (kk - 1));
@@ -1311,7 +1312,7 @@ const JpegCORE = {
                                         }
 
                                         // Sign decision (predict from current sign when available; default MPS=0).
-                                        const signState = readPackedCtx(acCtx, signSlot(k), 0);
+                                        const signState = readPackedCtx(acCtx, signSlot(k), compState.lastAcSign);
                                         const signBit = arithmeticDecoder.decodeBit(signState);
                                         writePackedCtx(acCtx, signSlot(k), signState);
                                         pushTrace({ phase: "ac_sign", comp: c.type, acTbl: c.acTbl, k, idx: signState.idx, mps: signState.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
@@ -1342,6 +1343,7 @@ const JpegCORE = {
 
                                         const value = signBit ? -magnitude : magnitude;
                                         coeff[blockOffset + zig[k]] = value;
+                                        compState.lastAcSign = signBit ? 1 : 0;
                                         k++;
                                     }
                                     return 0;
@@ -1357,6 +1359,7 @@ const JpegCORE = {
                                     predDC[0] = 0; predDC[1] = 0; predDC[2] = 0;
                                     for (const compType of Object.keys(arithmeticState.compStateByType)) {
                                         arithmeticState.compStateByType[compType].lastDcDiff = 0;
+                                        arithmeticState.compStateByType[compType].lastAcSign = 0;
                                     }
                                     for (const tbl of Object.keys(arithmeticState.dcStatsByTable)) {
                                         arithmeticState.dcStatsByTable[tbl].fill(0);
