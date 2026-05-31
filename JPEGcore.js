@@ -942,10 +942,11 @@ const JpegCORE = {
                             // 0..62   : significance slots by zig-zag band
                             // 63      : EOB decision
                             // 64..79  : run-growth slots
+                            // 269..272: run class routing slots
                             // 80..142 : sign slots by band
                             // 143..205: magnitude-growth slots by band
                             // 206..268: magnitude-bit slots by band
-                            acBandContextByType[c.type] = new Uint8Array(269);
+                            acBandContextByType[c.type] = new Uint8Array(273);
                         }
                     }
 
@@ -1263,8 +1264,17 @@ const JpegCORE = {
                                             break;
                                         }
 
-                                        // Zero-run growth before next non-zero coefficient.
+                                        // Zero-run classification + growth before next non-zero coefficient.
+                                        // Stage 1: short vs long run class.
+                                        const runClassState = readPackedCtx(acCtx, 269, 0);
+                                        const longRunClass = arithmeticDecoder.decodeBit(runClassState);
+                                        writePackedCtx(acCtx, 269, runClassState);
+                                        pushTrace({ phase: "ac_run_class", comp: c.type, acTbl: c.acTbl, k, idx: runClassState.idx, mps: runClassState.mps, bit: longRunClass, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (longRunClass === STAT_MARKER || longRunClass === STAT_RST || longRunClass === null) return longRunClass;
+
                                         let run = 0;
+                                        const runCap = longRunClass ? 63 : 7;
+                                        const runClassSlotBase = longRunClass ? 271 : 270;
                                         while (k + run < 64) {
                                             const runSlot = 64 + Math.min(run, 15);
                                             const runState = readPackedCtx(acCtx, runSlot, 0);
@@ -1273,7 +1283,18 @@ const JpegCORE = {
                                             pushTrace({ phase: "ac_run", comp: c.type, acTbl: c.acTbl, k, run, idx: runState.idx, mps: runState.mps, bit: keepZero, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
                                             if (keepZero === STAT_MARKER || keepZero === STAT_RST || keepZero === null) return keepZero;
                                             if (keepZero === 0) break;
+
+                                            // Class-local growth confirmation: adds an extra decision
+                                            // so short/long branches can diverge statistically.
+                                            const classGrowState = readPackedCtx(acCtx, runClassSlotBase + Math.min(run, 1), 0);
+                                            const classGrow = arithmeticDecoder.decodeBit(classGrowState);
+                                            writePackedCtx(acCtx, runClassSlotBase + Math.min(run, 1), classGrowState);
+                                            pushTrace({ phase: "ac_run_class_grow", comp: c.type, acTbl: c.acTbl, k, run, idx: classGrowState.idx, mps: classGrowState.mps, bit: classGrow, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (classGrow === STAT_MARKER || classGrow === STAT_RST || classGrow === null) return classGrow;
+                                            if (classGrow === 0) break;
+
                                             run++;
+                                            if (run >= runCap) break;
                                         }
                                         k += run;
                                         if (k >= 64) break;
