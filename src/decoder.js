@@ -591,7 +591,9 @@
                                     let magnitude = 1 + Math.max(0, cond.L) + magClass;
                                     let extraBits = magClass;
                                     while (extraBits-- > 0) {
-                                        const b = arithmeticDecoder.decodeBypassBit();
+                                        const magBitState = arithmeticDecoder.createContextState(0, compCtx[3]);
+                                        const b = arithmeticDecoder.decodeBit(magBitState);
+                                        compCtx[3] = magBitState.idx;
                                         if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
                                         magnitude = (magnitude << 1) | b;
                                     }
@@ -637,7 +639,9 @@
                                         let magnitude = 1 + magClass;
                                         let extra = magClass;
                                         while (extra-- > 0) {
-                                            const b = arithmeticDecoder.decodeBypassBit();
+                                            const magBitState = arithmeticDecoder.createContextState(0, acCtx[k - 1]);
+                                            const b = arithmeticDecoder.decodeBit(magBitState);
+                                            acCtx[k - 1] = magBitState.idx;
                                             if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
                                             magnitude = (magnitude << 1) | b;
                                         }

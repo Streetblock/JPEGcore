@@ -222,6 +222,12 @@
         let totalTimeCore = 0;
         let totalTimeJs = 0;
         let lastResultData = null; // Store last result for re-rendering diff
+        const hasMarker = (bytes, marker) => {
+            for (let i = 0; i < bytes.length - 1; i++) {
+                if (bytes[i] === 0xFF && bytes[i + 1] === marker) return true;
+            }
+            return false;
+        };
 
         fileInput.addEventListener('change', async (e) => {
             await ensureJpegJsReady();
@@ -258,15 +264,24 @@
                     const t1 = performance.now();
                     const dtCore = t1 - t0;
 
-                    // 2. jpeg-js Run
-                    const t2 = performance.now();
-                    const rawJs = JpegJS_Reference.decode(arrayBuffer, { useTArray: true });
-                    const t3 = performance.now();
-                    const imgDataJs = new ImageData(new Uint8ClampedArray(rawJs.data), rawJs.width, rawJs.height);
-                    const dtJs = t3 - t2;
+                    // 2. jpeg-js Run (SOF9 arithmetic is not supported by jpeg-js)
+                    let imgDataJs = null;
+                    let dtJs = 0;
+                    let refUnsupported = false;
+                    const bytes = new Uint8Array(arrayBuffer);
+                    if (hasMarker(bytes, 0xC9)) {
+                        refUnsupported = true;
+                        imgDataJs = imgDataCore;
+                    } else {
+                        const t2 = performance.now();
+                        const rawJs = JpegJS_Reference.decode(arrayBuffer, { useTArray: true });
+                        const t3 = performance.now();
+                        imgDataJs = new ImageData(new Uint8ClampedArray(rawJs.data), rawJs.width, rawJs.height);
+                        dtJs = t3 - t2;
+                    }
 
                     // 3. Compare
-                    const rmse = calculateRMSE(imgDataCore, imgDataJs);
+                    const rmse = refUnsupported ? 0 : calculateRMSE(imgDataCore, imgDataJs);
 
                     // Update Stats
                     totalTimeCore += dtCore;
@@ -274,9 +289,9 @@
                     updateStats();
 
                     // Update UI Row
-                    const winner = dtCore < dtJs ? 'CORE' : 'JS';
-                    const winColor = dtCore < dtJs ? 'text-emerald-400' : 'text-blue-400';
-                    const diffColor = rmse < 2.0 ? 'text-slate-500' : (rmse < 10 ? 'text-yellow-500' : 'text-pink-500');
+                    const winner = refUnsupported ? 'CORE' : (dtCore < dtJs ? 'CORE' : 'JS');
+                    const winColor = refUnsupported ? 'text-emerald-400' : (dtCore < dtJs ? 'text-emerald-400' : 'text-blue-400');
+                    const diffColor = refUnsupported ? 'text-slate-500' : (rmse < 2.0 ? 'text-slate-500' : (rmse < 10 ? 'text-yellow-500' : 'text-pink-500'));
 
                     row.className = 'p-3 rounded bg-slate-800 border-l-4 border-slate-700 cursor-pointer hover:bg-slate-700 transition group';
                     if (winner === 'CORE') row.classList.add('border-l-emerald-500');
@@ -289,9 +304,9 @@
                         </div>
                         <div class="grid grid-cols-2 gap-2 text-[10px] text-slate-400 font-mono">
                             <div>CORE: <span class="text-slate-200">${dtCore.toFixed(1)}ms</span></div>
-                            <div>JS: <span class="text-slate-200">${dtJs.toFixed(1)}ms</span></div>
+                            <div>JS: <span class="text-slate-200">${refUnsupported ? 'n/a' : dtJs.toFixed(1) + 'ms'}</span></div>
                         </div>
-                        <div class="text-[9px] mt-1 text-right ${diffColor}">RMSE: ${rmse.toFixed(2)}</div>
+                        <div class="text-[9px] mt-1 text-right ${diffColor}">${refUnsupported ? 'RMSE: n/a (jpeg-js no SOF9)' : 'RMSE: ' + rmse.toFixed(2)}</div>
                     `;
 
                     // Interaction
