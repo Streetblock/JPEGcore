@@ -1295,7 +1295,7 @@ const JpegCORE = {
                                 if (!(isSequential || isDcFirst || isAcFirst || isDcRefine || isAcRefine)) {
                                     throw new Error(`Arithmetic JPEG scan mode not supported yet (Ss=${Ss}, Se=${Se}, Ah=${Ah}, Al=${Al}; DAC DC=${dcCount}, AC=${acCount}).`);
                                 }
-                                if (isDcRefine || isAcRefine) {
+                                if (isAcRefine) {
                                     throw new Error(`Arithmetic JPEG refine scan not implemented yet (Ss=${Ss}, Se=${Se}, Ah=${Ah}, Al=${Al}).`);
                                 }
 
@@ -1565,6 +1565,24 @@ const JpegCORE = {
                                                 }
                                                 const compState = arithmeticState.compStateByType[c.type];
                                                 coeff[blockOffset] = (compState.lastDcVal | 0) << Al;
+                                                dcBlocksDecoded++;
+                                            } else if (isDcRefine) {
+                                                // DC refinement: fixed 0.5 bin, set bit Al when decoded bit is 1.
+                                                const fixed = arithmeticState.fixedBin;
+                                                const sRef = readPackedCtx(fixed, 0, 0);
+                                                const bit = arithmeticDecoder.decodeBit(sRef);
+                                                writePackedCtx(fixed, 0, sRef);
+                                                pushTrace({ phase: "dc_refine", annex: "F.26", decision: "REF", comp: c.type, dcTbl: c.dcTbl, idx: sRef.idx, mps: sRef.mps, bit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) {
+                                                    if (bit === STAT_RST) {
+                                                        rstEvents++;
+                                                        resetArithmeticRestartState(true);
+                                                        continue;
+                                                    }
+                                                    arithmeticStopStatus = bit;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                if (bit === 1) coeff[blockOffset] |= (1 << Al);
                                                 dcBlocksDecoded++;
                                             }
 
