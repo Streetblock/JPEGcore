@@ -523,9 +523,8 @@
                                 if (!(isSequential || isDcFirst || isAcFirst || isDcRefine || isAcRefine)) {
                                     throw new Error(`Arithmetic JPEG scan mode not supported yet (Ss=${Ss}, Se=${Se}, Ah=${Ah}, Al=${Al}; DAC DC=${dcCount}, AC=${acCount}).`);
                                 }
-                                if (isAcRefine) {
-                                    throw new Error(`Arithmetic JPEG refine scan not implemented yet (Ss=${Ss}, Se=${Se}, Ah=${Ah}, Al=${Al}).`);
-                                }
+                                const p1 = 1 << Al;
+                                const m1 = (-1) << Al;
 
                                 for (const c of comps) {
                                     if (!arithmeticTables.dc[c.dcTbl]) {
@@ -737,6 +736,61 @@
                                     }
                                     return 0;
                                 };
+                                const decodeArithmeticAcRefineBlock = (blockOffset, c, kFrom, kTo, p1, m1) => {
+                                    const stats = arithmeticState.acStatsByTable[c.acTbl];
+                                    const fixed = arithmeticState.fixedBin;
+                                    let kex = kTo;
+                                    while (kex > 0) {
+                                        if ((coeff[blockOffset + zig[kex]] | 0) !== 0) break;
+                                        kex--;
+                                    }
+
+                                    for (let k = kFrom; k <= kTo; k++) {
+                                        let stBase = 3 * (k - 1);
+                                        if (k > kex) {
+                                            const sEob = readPackedCtx(stats, stBase, 0);
+                                            const eob = arithmeticDecoder.decodeBit(sEob);
+                                            writePackedCtx(stats, stBase, sEob);
+                                            pushTrace({ phase: "ac_refine_eob", annex: "F.27", decision: "EOB", comp: c.type, acTbl: c.acTbl, k, idx: sEob.idx, mps: sEob.mps, bit: eob, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
+                                            if (eob) break;
+                                        }
+
+                                        for (;;) {
+                                            const idx = blockOffset + zig[k];
+                                            const cur = coeff[idx] | 0;
+                                            if (cur !== 0) {
+                                                const sRef = readPackedCtx(stats, stBase + 2, 0);
+                                                const b = arithmeticDecoder.decodeBit(sRef);
+                                                writePackedCtx(stats, stBase + 2, sRef);
+                                                pushTrace({ phase: "ac_refine_existing", annex: "F.27", decision: "REF1", comp: c.type, acTbl: c.acTbl, k, idx: sRef.idx, mps: sRef.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                                if (b) coeff[idx] = (cur < 0) ? (cur + m1) : (cur + p1);
+                                                break;
+                                            }
+
+                                            const sNew = readPackedCtx(stats, stBase + 1, 0);
+                                            const newBit = arithmeticDecoder.decodeBit(sNew);
+                                            writePackedCtx(stats, stBase + 1, sNew);
+                                            pushTrace({ phase: "ac_refine_new", annex: "F.27", decision: "NEW", comp: c.type, acTbl: c.acTbl, k, idx: sNew.idx, mps: sNew.mps, bit: newBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (newBit === STAT_MARKER || newBit === STAT_RST || newBit === null) return newBit;
+                                            if (newBit) {
+                                                const sSign = readPackedCtx(fixed, 0, 0);
+                                                const signBit = arithmeticDecoder.decodeBit(sSign);
+                                                writePackedCtx(fixed, 0, sSign);
+                                                pushTrace({ phase: "ac_refine_sign", annex: "F.27", decision: "S", comp: c.type, acTbl: c.acTbl, k, idx: sSign.idx, mps: sSign.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
+                                                coeff[idx] = signBit ? m1 : p1;
+                                                break;
+                                            }
+
+                                            stBase += 3;
+                                            k++;
+                                            if (k > kTo) return 0;
+                                        }
+                                    }
+                                    return 0;
+                                };
 
                                 // Arithmetic milestone: consume DC and an initial AC pass with context state.
                                 let dcBlocksDecoded = 0;
@@ -825,6 +879,18 @@
                                                 }
                                                 if (acStatus === STAT_MARKER || acStatus === null) {
                                                     arithmeticStopStatus = acStatus;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                acBlocksDecoded++;
+                                            } else if (isAcRefine) {
+                                                const acRefineStatus = decodeArithmeticAcRefineBlock(blockOffset, c, Ss, Se, p1, m1);
+                                                if (acRefineStatus === STAT_RST) {
+                                                    rstEvents++;
+                                                    resetArithmeticRestartState(true);
+                                                    continue;
+                                                }
+                                                if (acRefineStatus === STAT_MARKER || acRefineStatus === null) {
+                                                    arithmeticStopStatus = acRefineStatus;
                                                     break outerArithmeticLoop;
                                                 }
                                                 acBlocksDecoded++;
