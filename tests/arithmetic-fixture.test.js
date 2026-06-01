@@ -42,6 +42,20 @@ async function main() {
     assert.ok(table.Kx >= 1 && table.Kx <= 63, "AC conditioning Kx out of range");
   }
 
+  JpegCORE.Config.strictArithmeticDecode = false;
+  const decoded = await JpegCORE.JpegJsCompat.decode(bytes);
+  assert.ok(decoded.width > 0, "decoded width should be > 0");
+  assert.ok(decoded.height > 0, "decoded height should be > 0");
+  assert.equal(decoded.data.length, decoded.width * decoded.height * 4, "decoded RGBA length mismatch");
+  let alphaOk = true;
+  let nonZeroSeen = false;
+  for (let i = 0; i < decoded.data.length; i += 4) {
+    if (decoded.data[i + 3] !== 255) alphaOk = false;
+    if (decoded.data[i] || decoded.data[i + 1] || decoded.data[i + 2]) nonZeroSeen = true;
+  }
+  assert.equal(alphaOk, true, "decoded alpha should be opaque");
+  assert.equal(nonZeroSeen, true, "decoded RGB should not be all zero");
+
   // SOF10 probe detection smoke check:
   // mutate SOF9 marker byte (FFC9) to SOF10 (FFCA) and ensure analysis flags arithmetic+progressive.
   const sof10Bytes = Buffer.from(bytes);
@@ -58,19 +72,18 @@ async function main() {
   assert.equal(sof10Probe.detectedArithmetic, true, "SOF10 should be treated as arithmetic");
   assert.equal(sof10Probe.detectedProgressive, true, "SOF10 should be treated as progressive");
 
-  JpegCORE.Config.strictArithmeticDecode = false;
-  const decoded = await JpegCORE.JpegJsCompat.decode(bytes);
-  assert.ok(decoded.width > 0, "decoded width should be > 0");
-  assert.ok(decoded.height > 0, "decoded height should be > 0");
-  assert.equal(decoded.data.length, decoded.width * decoded.height * 4, "decoded RGBA length mismatch");
-  let alphaOk = true;
-  let nonZeroSeen = false;
-  for (let i = 0; i < decoded.data.length; i += 4) {
-    if (decoded.data[i + 3] !== 255) alphaOk = false;
-    if (decoded.data[i] || decoded.data[i + 1] || decoded.data[i + 2]) nonZeroSeen = true;
+  // Synthetic SOF10 end-to-end decode smoke:
+  // keep arithmetic payload identical, only mutate SOF9 frame marker -> SOF10.
+  const decodedSof10 = await JpegCORE.JpegJsCompat.decode(sof10Bytes);
+  assert.equal(decodedSof10.width, decoded.width, "SOF10 width should match");
+  assert.equal(decodedSof10.height, decoded.height, "SOF10 height should match");
+  assert.equal(decodedSof10.data.length, decodedSof10.width * decodedSof10.height * 4, "SOF10 RGBA length mismatch");
+  let sof10NonZeroSeen = false;
+  for (let i = 0; i < decodedSof10.data.length; i += 4) {
+    if (decodedSof10.data[i + 3] !== 255) throw new Error("SOF10 alpha should be opaque");
+    if (decodedSof10.data[i] || decodedSof10.data[i + 1] || decodedSof10.data[i + 2]) sof10NonZeroSeen = true;
   }
-  assert.equal(alphaOk, true, "decoded alpha should be opaque");
-  assert.equal(nonZeroSeen, true, "decoded RGB should not be all zero");
+  assert.equal(sof10NonZeroSeen, true, "SOF10 decoded RGB should not be all zero");
 
   const strictCore = loadCore(repoRoot).JpegCORE;
   strictCore.Config.strictArithmeticDecode = true;
