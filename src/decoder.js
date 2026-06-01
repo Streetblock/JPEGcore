@@ -847,16 +847,70 @@
                                 };
                                 const compByType = {};
                                 for (const c of comps) compByType[c.type] = c;
-                                outerArithmeticLoop:
-                                for (let m = 0; m < cols * rows; m++) {
-                                    let mcuDone = false;
-                                    for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
+                                const decodePlan = [];
+                                const isNonInterleavedScan = (ns === 1 && comps.length === 1);
+                                if (isNonInterleavedScan) {
+                                    const c = comps[0];
+                                    let orderedOffsets = compBlockOffsetsCache[c.type];
+                                    if (!orderedOffsets) {
+                                        const blkIndices = [];
+                                        for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
+                                            const def = mcuStructure.blocks[bIdx];
+                                            const compType = (def.t === "C") ? (def.c === 0 ? 1 : 2) : 0;
+                                            if (compType === c.type) blkIndices.push(bIdx);
+                                        }
+                                        if (blkIndices.length === 0) {
+                                            orderedOffsets = new Int32Array(0);
+                                        } else {
+                                            let hComp = 0, vComp = 0;
+                                            const subToBIdx = [];
+                                            for (const bIdx of blkIndices) {
+                                                const def = mcuStructure.blocks[bIdx];
+                                                if (def.dx + 1 > hComp) hComp = def.dx + 1;
+                                                if (def.dy + 1 > vComp) vComp = def.dy + 1;
+                                                subToBIdx[(def.dy * 8) + def.dx] = bIdx;
+                                            }
+
+                                            const compCols = Math.ceil((w * hComp) / (mcuStructure.hMax * 8));
+                                            const compRows = Math.ceil((h * vComp) / (mcuStructure.vMax * 8));
+                                            const ordered = [];
+                                            for (let by = 0; by < compRows; by++) {
+                                                const mcuY = (by / vComp) | 0;
+                                                const subY = by % vComp;
+                                                for (let bx = 0; bx < compCols; bx++) {
+                                                    const mcuX = (bx / hComp) | 0;
+                                                    const subX = bx % hComp;
+                                                    const bIdx = subToBIdx[(subY * 8) + subX];
+                                                    if (bIdx === undefined) continue;
+                                                    const m = mcuY * cols + mcuX;
+                                                    ordered.push((m * blocksPerMCU + bIdx) * 64);
+                                                }
+                                            }
+                                            orderedOffsets = new Int32Array(ordered.length);
+                                            for (let i = 0; i < ordered.length; i++) orderedOffsets[i] = ordered[i];
+                                        }
+                                        compBlockOffsetsCache[c.type] = orderedOffsets;
+                                    }
+                                    for (let i = 0; i < orderedOffsets.length; i++) {
+                                        decodePlan.push({ blockOffset: orderedOffsets[i], c, endOfMCU: true });
+                                    }
+                                } else {
+                                    for (let m = 0; m < cols * rows; m++) {
+                                        let lastInMcu = -1;
+                                        for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
                                             const blk = blockList[m * blocksPerMCU + bIdx];
                                             if (!blk) continue;
                                             const c = compByType[blk.comp];
                                             if (!c) continue;
-
-                                            const blockOffset = (m * blocksPerMCU + bIdx) * 64;
+                                            decodePlan.push({ blockOffset: (m * blocksPerMCU + bIdx) * 64, c, endOfMCU: false });
+                                            lastInMcu = decodePlan.length - 1;
+                                        }
+                                        if (lastInMcu >= 0) decodePlan[lastInMcu].endOfMCU = true;
+                                    }
+                                }
+                                outerArithmeticLoop:
+                                for (let step = 0; step < decodePlan.length; step++) {
+                                            const { blockOffset, c, endOfMCU } = decodePlan[step];
                                             if (blockOffset + 64 > coeff.length) break outerArithmeticLoop;
 
                                             if (isSequential || isDcFirst) {
@@ -920,12 +974,10 @@
                                                 }
                                                 acBlocksDecoded++;
                                             }
-                                            mcuDone = true;
-                                    }
-                                    if (mcuDone && restartIntervalMCUs > 0) {
+                                    if (endOfMCU && restartIntervalMCUs > 0) {
                                         mcusSinceRestart++;
                                         if (mcusSinceRestart >= restartIntervalMCUs) {
-                                            resetArithmeticRestartState();
+                                            resetArithmeticRestartState(true);
                                             mcusSinceRestart = 0;
                                         }
                                     }
