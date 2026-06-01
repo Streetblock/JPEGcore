@@ -543,6 +543,8 @@
                                 const traceLimit = (JpegCORE.Config.arithmeticTraceLimit | 0) > 0 ? (JpegCORE.Config.arithmeticTraceLimit | 0) : 0;
                                 const arithmeticTrace = [];
                                 const arithmeticFailFast = !!JpegCORE.Config.strictArithmeticFailFast;
+                                const ARITH_RST = { kind: "ARITH_RST" };
+                                const ARITH_MARKER = { kind: "ARITH_MARKER" };
                                 const pushTrace = (entry) => {
                                     if (traceLimit <= 0) return;
                                     if (arithmeticTrace.length >= traceLimit) return;
@@ -597,7 +599,9 @@
                                     const nz = arithmeticDecoder.decodeBit(s0);
                                     writePackedCtx(stats, stIndex, s0);
                                     pushTrace({ phase: "dc_zero", annex: "F.19", decision: "S0", comp: c.type, dcTbl: c.dcTbl, idx: s0.idx, mps: s0.mps, bit: nz, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                    if (nz === STAT_MARKER || nz === STAT_RST || nz === null) return nz;
+                                    if (nz === STAT_MARKER) return ARITH_MARKER;
+                                    if (nz === STAT_RST) return ARITH_RST;
+                                    if (nz === null) return null;
                                     if (nz === 0) {
                                         compState.dcContext = 0;
                                         return 0;
@@ -607,14 +611,18 @@
                                     const sign = arithmeticDecoder.decodeBit(sSign);
                                     writePackedCtx(stats, stIndex + 1, sSign);
                                     pushTrace({ phase: "dc_sign", annex: "F.22", decision: "SS", comp: c.type, dcTbl: c.dcTbl, idx: sSign.idx, mps: sSign.mps, bit: sign, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                    if (sign === STAT_MARKER || sign === STAT_RST || sign === null) return sign;
+                                    if (sign === STAT_MARKER) return ARITH_MARKER;
+                                    if (sign === STAT_RST) return ARITH_RST;
+                                    if (sign === null) return null;
 
                                     stIndex += 2 + (sign ? 1 : 0);
                                     const sClass = readPackedCtx(stats, stIndex, 0);
                                     let m = arithmeticDecoder.decodeBit(sClass);
                                     writePackedCtx(stats, stIndex, sClass);
                                     pushTrace({ phase: "dc_mag_class", annex: "F.23", decision: "SP", comp: c.type, dcTbl: c.dcTbl, idx: sClass.idx, mps: sClass.mps, bit: m, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                    if (m === STAT_MARKER || m === STAT_RST || m === null) return m;
+                                    if (m === STAT_MARKER) return ARITH_MARKER;
+                                    if (m === STAT_RST) return ARITH_RST;
+                                    if (m === null) return null;
 
                                     if (m) {
                                         stIndex = 20;
@@ -623,7 +631,9 @@
                                             const b = arithmeticDecoder.decodeBit(sGrow);
                                             writePackedCtx(stats, stIndex, sGrow);
                                             pushTrace({ phase: "dc_mag_grow", annex: "F.23", decision: "X1", comp: c.type, dcTbl: c.dcTbl, idx: sGrow.idx, mps: sGrow.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                            if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                            if (b === STAT_MARKER) return ARITH_MARKER;
+                                            if (b === STAT_RST) return ARITH_RST;
+                                            if (b === null) return null;
                                             if (!b) break;
                                             m <<= 1;
                                             stIndex += 1;
@@ -649,13 +659,15 @@
                                         const b = arithmeticDecoder.decodeBit(sBit);
                                         writePackedCtx(stats, stIndex, sBit);
                                         pushTrace({ phase: "dc_mag_bits", annex: "F.24", decision: "V", comp: c.type, dcTbl: c.dcTbl, idx: sBit.idx, mps: sBit.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
-                                        if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                        if (b === STAT_MARKER) return ARITH_MARKER;
+                                        if (b === STAT_RST) return ARITH_RST;
+                                        if (b === null) return null;
                                         if (b) v |= m;
                                     }
 
                                     v += 1;
                                     if (sign) v = -v;
-                                    compState.lastDcVal = ((compState.lastDcVal + v) & 0xffff) | 0;
+                                    compState.lastDcVal = (compState.lastDcVal + v) | 0;
                                     return v;
                                 };
 
@@ -915,12 +927,12 @@
 
                                             if (isSequential || isDcFirst) {
                                                 const diff = decodeArithmeticDcDiff(c);
-                                                if (diff === STAT_RST) {
+                                                if (diff === ARITH_RST) {
                                                     rstEvents++;
                                                     resetArithmeticRestartState(true);
                                                     continue;
                                                 }
-                                                if (diff === STAT_MARKER || diff === STAT_BAD_CODE || diff === null) {
+                                                if (diff === ARITH_MARKER || diff === STAT_BAD_CODE || diff === null) {
                                                     arithmeticStopStatus = diff;
                                                     break outerArithmeticLoop;
                                                 }
