@@ -4,6 +4,7 @@
             constructor() {
                 this.p = new Int32Array(64);
                 this.defaultOut = new Uint8ClampedArray(64);
+                this.scaledTemp = new Uint8ClampedArray(64);
             }
 
             transform(inBuffer, inOffset, quantTable, outSize = 8, outBuffer = null, outOffset = 0) {
@@ -12,9 +13,30 @@
 
                 // DC-Only optimization
                 if (outSize === 1) {
-                   const val = (inBuffer[inOffset] * qt[0] + 1024) >> 11;
-                   target[outOffset] = val + 128;
+                   const val = 128 + ((inBuffer[inOffset] * qt[0] + 4) >> 3);
+                   target[outOffset] = val < 0 ? 0 : (val > 255 ? 255 : val);
                    return target;
+                }
+
+                if (outSize === 2 || outSize === 4) {
+                    const fullBlock = this.scaledTemp;
+                    this._transformLoefflerInt(inBuffer, inOffset, qt, fullBlock, 0);
+
+                    const step = 8 / outSize;
+                    const area = step * step;
+                    for (let y = 0; y < outSize; y++) {
+                        for (let x = 0; x < outSize; x++) {
+                            let sum = 0;
+                            for (let sy = 0; sy < step; sy++) {
+                                const row = (y * step + sy) * 8;
+                                for (let sx = 0; sx < step; sx++) {
+                                    sum += fullBlock[row + x * step + sx];
+                                }
+                            }
+                            target[outOffset + y * 8 + x] = Math.round(sum / area);
+                        }
+                    }
+                    return target;
                 }
 
                 this._transformLoefflerInt(inBuffer, inOffset, qt, target, outOffset);
@@ -1396,7 +1418,7 @@
             if (w === 0 || h === 0) return new ImageData(1, 1);
 
             // 2. Setup
-            const blockSize = (scale === 0.5) ? 4 : (scale === 0.25 ? 2 : 8);
+            const blockSize = (scale === 0.5) ? 4 : (scale === 0.25 ? 2 : (scale === 0.125 ? 1 : 8));
             // Fallback auf '420', falls kein Mode erkannt wurde
             const mode = decoded.mode || '420';
             const SM = JpegCORE.Constants.SAMPLE_MODES[mode] || JpegCORE.Constants.SAMPLE_MODES['420'];
@@ -1450,7 +1472,7 @@
 
                         for (let y = 0; y < maxY; y++) {
                             let ptr = rowBase + (y * w * 4) + (ox * 4);
-                            const srcRow = y * blockSize;
+                            const srcRow = y * 8;
                             for (let x = 0; x < maxX; x++) {
                                 const Y = mcuPix[srcRow + x];
                                 finalData[ptr++] = Y;
@@ -1608,7 +1630,7 @@
                             if (mode === '444') {
                                 // 4:4:4 (Kein Subsampling): Y, Cb, Cr sind alle 8x8
                                 // Blöcke: [Y, Cb, Cr]
-                                const pixIdx = y * 8 + x; // Da MCU hier immer 8x8 ist
+                                const pixIdx = y * 8 + x;
                                 Y  = mcuPix[pixIdx];      // Block 0
                                 Cb = mcuPix[64 + pixIdx]; // Block 1 (+64)
                                 Cr = mcuPix[128 + pixIdx];// Block 2 (+128)
@@ -1617,8 +1639,8 @@
                                 // 4:2:2 (Horizontal Subsampling): MCU 16x8
                                 // Blöcke: [Y0, Y1, Cb, Cr]
                                 // Y Logik: Linke 8px -> Block 0, Rechte 8px -> Block 1
-                                const bx = x >> 3; // 0 oder 1
-                                const pixIdxY = y * 8 + (x % 8);
+                                const bx = Math.min(1, Math.floor(x / blockSize));
+                                const pixIdxY = y * 8 + (x % blockSize);
                                 Y = mcuPix[(bx * 64) + pixIdxY];
 
                                 // Chroma: 16px Breite auf 8px gepresst -> x / 2
@@ -1631,10 +1653,10 @@
                                 // 4:2:0 (Standard): MCU 16x16
                                 // Blöcke: [Y0, Y1, Y2, Y3, Cb, Cr]
                                 // Y Logik: 4 Quadranten
-                                const bx = x >> 3; // 0 oder 1
-                                const by = y >> 3; // 0 oder 1
+                                const bx = Math.min(1, Math.floor(x / blockSize));
+                                const by = Math.min(1, Math.floor(y / blockSize));
                                 const blkIdx = by * 2 + bx; // 0, 1, 2 oder 3
-                                Y = mcuPix[(blkIdx * 64) + (y % 8) * 8 + (x % 8)];
+                                Y = mcuPix[(blkIdx * 64) + (y % blockSize) * 8 + (x % blockSize)];
 
                                 // Chroma: 16x16 auf 8x8 -> x/2, y/2
                                 const cx = x >> 1;
