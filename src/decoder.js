@@ -798,6 +798,8 @@
                                 let arithmeticStopStatus = null;
                                 let rstEvents = 0;
                                 let mcusSinceRestart = 0;
+                                const resetDcOnRestart = (isSequential || isDcFirst);
+                                const resetAcOnRestart = (isSequential || isAcFirst || isAcRefine);
                                 const resetArithmeticRestartState = (consumeMarker = false) => {
                                     if (consumeMarker && arithmeticDecoder && typeof arithmeticDecoder.consumeRestartMarker === "function") {
                                         arithmeticDecoder.consumeRestartMarker();
@@ -805,22 +807,30 @@
                                     if (arithmeticDecoder && typeof arithmeticDecoder.resetForRestart === "function") {
                                         arithmeticDecoder.resetForRestart();
                                     }
-                                    predDC[0] = 0; predDC[1] = 0; predDC[2] = 0;
-                                    for (const compType of Object.keys(arithmeticState.compStateByType)) {
-                                        arithmeticState.compStateByType[compType].lastDcVal = 0;
-                                        arithmeticState.compStateByType[compType].dcContext = 0;
+                                    if (resetDcOnRestart) {
+                                        predDC[0] = 0; predDC[1] = 0; predDC[2] = 0;
+                                        for (const compType of Object.keys(arithmeticState.compStateByType)) {
+                                            arithmeticState.compStateByType[compType].lastDcVal = 0;
+                                            arithmeticState.compStateByType[compType].dcContext = 0;
+                                        }
+                                        for (const tbl of Object.keys(arithmeticState.dcStatsByTable)) {
+                                            arithmeticState.dcStatsByTable[tbl].fill(0);
+                                        }
                                     }
-                                    for (const tbl of Object.keys(arithmeticState.dcStatsByTable)) {
-                                        arithmeticState.dcStatsByTable[tbl].fill(0);
+                                    if (resetAcOnRestart) {
+                                        for (const tbl of Object.keys(arithmeticState.acStatsByTable)) {
+                                            arithmeticState.acStatsByTable[tbl].fill(0);
+                                        }
                                     }
-                                    for (const tbl of Object.keys(arithmeticState.acStatsByTable)) {
-                                        arithmeticState.acStatsByTable[tbl].fill(0);
+                                    if (resetDcOnRestart) {
+                                        for (const compType of Object.keys(arithmeticState.dcMagnitudeContextByType)) {
+                                            arithmeticState.dcMagnitudeContextByType[compType].fill(0);
+                                        }
                                     }
-                                    for (const compType of Object.keys(arithmeticState.dcMagnitudeContextByType)) {
-                                        arithmeticState.dcMagnitudeContextByType[compType].fill(0);
-                                    }
-                                    for (const compType of Object.keys(arithmeticState.acBandContextByType)) {
-                                        arithmeticState.acBandContextByType[compType].fill(0);
+                                    if (resetAcOnRestart) {
+                                        for (const compType of Object.keys(arithmeticState.acBandContextByType)) {
+                                            arithmeticState.acBandContextByType[compType].fill(0);
+                                        }
                                     }
                                 };
                                 const compByType = {};
