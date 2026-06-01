@@ -106,7 +106,11 @@
                 const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
-                let infoStr = "", detectedSamp = '420';
+                let infoStr = "", detectedSamp = '420', detectedProgressive = false, detectedArithmetic = false;
+                let detectedWidth = 0, detectedHeight = 0;
+                let restartIntervalMCUs = 0;
+                const arithmeticDcTables = {};
+                const arithmeticAcTables = {};
                 let detectedOrientation = null;
                 const rawHuff = { 0: {}, 1: {} };
 
@@ -118,9 +122,17 @@
                         if (type >= M.SOF0 && type <= M.COM) {
                             const len = (d[pos + 2] << 8) | d[pos + 3];
                             const fullSegment = d.slice(pos, pos + 2 + len);
-                            if (type === M.SOF0) {
+                            if (type === M.SOF0 || type === M.SOF2 || type === M.SOF9) {
+                                detectedProgressive = (type === M.SOF2);
+                                detectedArithmetic = (type === M.SOF9);
+                                detectedHeight = ((d[pos + 5] << 8) | d[pos + 6]) >>> 0;
+                                detectedWidth = ((d[pos + 7] << 8) | d[pos + 8]) >>> 0;
                                 const ySamp = d[pos + 11];
-                                if (ySamp === 0x22) detectedSamp = '420'; else if (ySamp === 0x21) detectedSamp = '422'; else if (ySamp === 0x11) detectedSamp = '444';
+                                const numComps = d[pos + 9];
+                                if (numComps === 1) detectedSamp = 'GRAY';
+                                else if (ySamp === 0x22) detectedSamp = '420';
+                                else if (ySamp === 0x21) detectedSamp = '422';
+                                else if (ySamp === 0x11) detectedSamp = '444';
                                 infoStr += `[Fmt:${detectedSamp}] `;
                             } else if (type === M.DQT) {
                                 let subPos = pos + 4, end = pos + 2 + len;
@@ -144,6 +156,30 @@
                                     const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
                                     if (rawHuff[tc]) rawHuff[tc][th] = { n: nr, v: val };
                                 }
+                            } else if (type === M.DRI) {
+                                restartIntervalMCUs = ((d[pos + 4] << 8) | d[pos + 5]) >>> 0;
+                            } else if (type === M.DAC) {
+                                let subPos = pos + 4, end = pos + 2 + len;
+                                while (subPos + 1 < end) {
+                                    const tcTb = d[subPos++];
+                                    const cond = d[subPos++];
+                                    const tc = (tcTb >> 4) & 0x0F;
+                                    const tb = tcTb & 0x0F;
+                                    if (tb > 3) continue;
+                                    if (tc === 0) {
+                                        const U = (cond >> 4) & 0x0F;
+                                        const L = cond & 0x0F;
+                                        if (L <= U) {
+                                            arithmeticDcTables[tb] = { L, U };
+                                        }
+                                    } else if (tc === 1) {
+                                        const Kx = cond & 0x3F;
+                                        if (Kx >= 1 && Kx <= 63) {
+                                            arithmeticAcTables[tb] = { Kx };
+                                        }
+                                    }
+                                }
+                                detectedArithmetic = true;
                             } else if ((type >= M.APP0 && type <= 0xEF) || type === M.COM) {
                                 meta.push(fullSegment);
                                 const label = (type === M.COM) ? "COM" : "APP" + (type - 0xE0);
@@ -172,7 +208,14 @@
                 if (foundCustom) infoStr += "[Huffman:Custom] "; else infoStr += "[Huffman:Std] ";
 
                 return {
+                    width: detectedWidth,
+                    height: detectedHeight,
                     detectedMode: detectedSamp,
+                    detectedProgressive: detectedProgressive,
+                    detectedArithmetic: detectedArithmetic,
+                    restartIntervalMCUs: restartIntervalMCUs,
+                    arithmeticDcTables: arithmeticDcTables,
+                    arithmeticAcTables: arithmeticAcTables,
                     detectedHuffman: foundCustom ? extractedHuff : null,
                     detectedMetaSegments: meta,
                     detectedOrientation: detectedOrientation,

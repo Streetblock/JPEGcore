@@ -178,10 +178,13 @@
                 // Wir nutzen die neuen Utility-Funktionen
                 const utils = JpegCORE.Utils;
                 const makeTree = utils.makeHuffmanTree;
+                const ArithmeticDecoder = utils.ArithmeticDecoder;
 
                 // STATUS CODES
                 const STAT_MARKER = -1;
                 const STAT_RST = -2;
+                const STAT_BAD_CODE = -2147483648;
+                const arithmeticTables = { dc: {}, ac: {} };
 
                 // --- Robust Bit Reader Instanz ---
                 // Wir erstellen den Reader. Er bekommt das Daten-Array 'd'.
@@ -280,10 +283,69 @@
                 if (d.length < 2) throw new Error("File too short");
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
                 let isProgressive = false;
+                let isArithmetic = false;
+                let restartIntervalMCUs = 0;
                 let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
 
                 if (d[0] === 0xFF && d[1] === M.SOI) pos = 2;
+                const parseDacSegment = (start, end) => {
+                    let subPos = start;
+                    while (subPos + 1 < end) {
+                        const tableClassAndId = d[subPos++];
+                        const conditioning = d[subPos++];
+                        const tc = (tableClassAndId >> 4) & 0x0F;
+                        const tb = tableClassAndId & 0x0F;
+                        if (tb > 3) continue;
+
+                        if (tc === 0) {
+                            const U = (conditioning >> 4) & 0x0F;
+                            const L = conditioning & 0x0F;
+                            if (L <= U) {
+                                arithmeticTables.dc[tb] = { L, U };
+                            }
+                        } else if (tc === 1) {
+                            const Kx = conditioning & 0x3F;
+                            if (Kx >= 1 && Kx <= 63) {
+                                arithmeticTables.ac[tb] = { Kx };
+                            }
+                        }
+                    }
+                };
+                const buildArithmeticScanState = (compsForScan) => {
+                    const dcStatsByTable = {};
+                    const acStatsByTable = {};
+                    const compStateByType = {};
+                    const dcConditioningByTable = {};
+                    const acConditioningByTable = {};
+                    const dcMagnitudeContextByType = {};
+                    const acBandContextByType = {};
+
+                    for (const c of compsForScan) {
+                        if (!dcStatsByTable[c.dcTbl]) dcStatsByTable[c.dcTbl] = new Uint8Array(64);
+                        if (!acStatsByTable[c.acTbl]) acStatsByTable[c.acTbl] = new Uint8Array(256);
+                        if (!dcConditioningByTable[c.dcTbl]) {
+                            dcConditioningByTable[c.dcTbl] = arithmeticTables.dc[c.dcTbl] || { L: 0, U: 1 };
+                        }
+                        if (!acConditioningByTable[c.acTbl]) {
+                            acConditioningByTable[c.acTbl] = arithmeticTables.ac[c.acTbl] || { Kx: 5 };
+                        }
+                        if (!compStateByType[c.type]) compStateByType[c.type] = { lastDcVal: 0, dcContext: 0 };
+                        if (!dcMagnitudeContextByType[c.type]) dcMagnitudeContextByType[c.type] = new Uint8Array(64);
+                        if (!acBandContextByType[c.type]) acBandContextByType[c.type] = new Uint8Array(256);
+                    }
+
+                    return {
+                        dcStatsByTable,
+                        acStatsByTable,
+                        compStateByType,
+                        dcConditioningByTable,
+                        acConditioningByTable,
+                        dcMagnitudeContextByType,
+                        acBandContextByType,
+                        fixedBin: new Uint8Array([113 & 0x7f])
+                    };
+                };
 
                 while (pos < d.length - 1) {
                     if (d[pos] !== 0xFF) { pos++; continue; }
@@ -298,8 +360,9 @@
                     const segmentEnd = pos + 1 + len;
                     if (segmentEnd > d.length) break;
 
-                    if (marker === M.SOF0 || marker === M.SOF2) {
+                    if (marker === M.SOF0 || marker === M.SOF2 || marker === M.SOF9) {
                         isProgressive = (marker === M.SOF2);
+                        isArithmetic = (marker === M.SOF9);
                         h = (d[pos + 4] << 8) | d[pos + 5];
                         w = (d[pos + 6] << 8) | d[pos + 7];
                         const numComps = d[pos + 8];
@@ -341,6 +404,12 @@
                             for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10;
                             quantTables[id] = naturalTbl;
                         }
+                    } else if (marker === M.DRI) {
+                        if (pos + 5 < d.length) {
+                            restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
+                        }
+                    } else if (marker === M.DAC) {
+                        parseDacSegment(pos + 3, segmentEnd);
                     }
                     pos = segmentEnd;
                 }
@@ -443,6 +512,523 @@
                             const kStart = (Ss > 1) ? Ss : 1;
                             const coeff = coeffBuffer;
                             const zig = ZZ;
+
+                            if (isArithmetic) {
+                                if (JpegCORE.Config.enableArithmeticDecode === false) {
+                                    throw new Error("Arithmetic JPEG support is disabled in this build/config.");
+                                }
+                                const dcCount = Object.keys(arithmeticTables.dc).length;
+                                const acCount = Object.keys(arithmeticTables.ac).length;
+                                const isSequential = (Ss === 0 && Se === 63 && Ah === 0);
+                                const isDcFirst = (Ss === 0 && Se === 0 && Ah === 0);
+                                const isAcFirst = (Ss > 0 && Se <= 63 && Ah === 0);
+                                const isDcRefine = (Ss === 0 && Se === 0 && Ah > 0);
+                                const isAcRefine = (Ss > 0 && Se <= 63 && Ah > 0);
+                                if (!(isSequential || isDcFirst || isAcFirst || isDcRefine || isAcRefine)) {
+                                    throw new Error(`Arithmetic JPEG scan mode not supported yet (Ss=${Ss}, Se=${Se}, Ah=${Ah}, Al=${Al}; DAC DC=${dcCount}, AC=${acCount}).`);
+                                }
+                                const p1 = 1 << Al;
+                                const m1 = (-1) << Al;
+
+                                for (const c of comps) {
+                                    if (!arithmeticTables.dc[c.dcTbl]) {
+                                        throw new Error(`Arithmetic JPEG missing DC conditioning table ${c.dcTbl} for component type ${c.type}.`);
+                                    }
+                                    if (!arithmeticTables.ac[c.acTbl]) {
+                                        throw new Error(`Arithmetic JPEG missing AC conditioning table ${c.acTbl} for component type ${c.type}.`);
+                                    }
+                                }
+                                const arithmeticState = buildArithmeticScanState(comps);
+                                const dcStateTables = Object.keys(arithmeticState.dcStatsByTable).length;
+                                const acStateTables = Object.keys(arithmeticState.acStatsByTable).length;
+                                const dcCompContexts = Object.keys(arithmeticState.dcMagnitudeContextByType).length;
+                                const acCompContexts = Object.keys(arithmeticState.acBandContextByType).length;
+                                const traceLimit = (JpegCORE.Config.arithmeticTraceLimit | 0) > 0 ? (JpegCORE.Config.arithmeticTraceLimit | 0) : 0;
+                                const arithmeticTrace = [];
+                                const arithmeticFailFast = !!JpegCORE.Config.strictArithmeticFailFast;
+                                const ARITH_RST = { kind: "ARITH_RST" };
+                                const ARITH_MARKER = { kind: "ARITH_MARKER" };
+                                const pushTrace = (entry) => {
+                                    if (traceLimit <= 0) return;
+                                    if (arithmeticTrace.length >= traceLimit) return;
+                                    arithmeticTrace.push(entry);
+                                };
+                                const formatTraceLine = (e, i) => {
+                                    const k = (typeof e.k === "number") ? ` k=${e.k}` : "";
+                                    const run = (typeof e.run === "number") ? ` run=${e.run}` : "";
+                                    const tbl = (typeof e.dcTbl === "number") ? ` dcTbl=${e.dcTbl}` : ((typeof e.acTbl === "number") ? ` acTbl=${e.acTbl}` : "");
+                                    const annex = e.annex ? ` annex=${e.annex}` : "";
+                                    const decision = e.decision ? ` dec=${e.decision}` : "";
+                                    return `#${i + 1} ${e.phase}${annex}${decision} comp=${e.comp}${tbl}${k}${run} ctx=(${e.idx},${e.mps}) bit=${e.bit} A=${e.a} C=${e.c}`;
+                                };
+                                const compactTrace = (limit = 6) => arithmeticTrace.slice(0, limit).map(formatTraceLine).join(" | ");
+                                const traceWindow = (centerStep, radius = 3) => {
+                                    if (!arithmeticTrace.length) return "";
+                                    const centerIdx = Math.max(0, Math.min(arithmeticTrace.length - 1, (centerStep | 0) - 1));
+                                    const start = Math.max(0, centerIdx - radius);
+                                    const end = Math.min(arithmeticTrace.length, centerIdx + radius + 1);
+                                    const lines = [];
+                                    for (let i = start; i < end; i++) {
+                                        const prefix = (i === centerIdx) ? ">>" : "  ";
+                                        lines.push(`${prefix}${formatTraceLine(arithmeticTrace[i], i)}`);
+                                    }
+                                    return lines.join(" ; ");
+                                };
+                                reader.pos = sosEnd;
+                                const arithmeticDecoder = new ArithmeticDecoder(reader);
+                                const initStatus = arithmeticDecoder.initialize();
+                                if (initStatus === STAT_MARKER || initStatus === STAT_RST || initStatus === null) {
+                                    throw new Error(`Arithmetic JPEG init failed (status=${initStatus}).`);
+                                }
+                                if (!arithmeticDecoder.initialized) {
+                                    throw new Error("Arithmetic JPEG init failed (decoder not initialized).");
+                                }
+                                const readPackedCtx = (bank, slot, defaultMps = 0) => {
+                                    const packed = bank[slot] | 0;
+                                    const mps = (packed >> 7) & 1;
+                                    const idx = packed & 0x7f;
+                                    return arithmeticDecoder.createContextState(mps || defaultMps, idx);
+                                };
+                                const writePackedCtx = (bank, slot, state) => {
+                                    bank[slot] = (((state.mps & 1) << 7) | (state.idx & 0x7f)) & 0xff;
+                                };
+                                const decodeArithmeticDcDiff = (c) => {
+                                    const compState = arithmeticState.compStateByType[c.type];
+                                    const stats = arithmeticState.dcStatsByTable[c.dcTbl];
+                                    const cond = arithmeticState.dcConditioningByTable[c.dcTbl];
+                                    let stIndex = compState.dcContext | 0;
+
+                                    const s0 = readPackedCtx(stats, stIndex, 0);
+                                    const nz = arithmeticDecoder.decodeBit(s0);
+                                    writePackedCtx(stats, stIndex, s0);
+                                    pushTrace({ phase: "dc_zero", annex: "F.19", decision: "S0", comp: c.type, dcTbl: c.dcTbl, idx: s0.idx, mps: s0.mps, bit: nz, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    if (nz === STAT_MARKER) return ARITH_MARKER;
+                                    if (nz === STAT_RST) return ARITH_RST;
+                                    if (nz === null) return null;
+                                    if (nz === 0) {
+                                        compState.dcContext = 0;
+                                        return 0;
+                                    }
+
+                                    const sSign = readPackedCtx(stats, stIndex + 1, 0);
+                                    const sign = arithmeticDecoder.decodeBit(sSign);
+                                    writePackedCtx(stats, stIndex + 1, sSign);
+                                    pushTrace({ phase: "dc_sign", annex: "F.22", decision: "SS", comp: c.type, dcTbl: c.dcTbl, idx: sSign.idx, mps: sSign.mps, bit: sign, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    if (sign === STAT_MARKER) return ARITH_MARKER;
+                                    if (sign === STAT_RST) return ARITH_RST;
+                                    if (sign === null) return null;
+
+                                    stIndex += 2 + (sign ? 1 : 0);
+                                    const sClass = readPackedCtx(stats, stIndex, 0);
+                                    let m = arithmeticDecoder.decodeBit(sClass);
+                                    writePackedCtx(stats, stIndex, sClass);
+                                    pushTrace({ phase: "dc_mag_class", annex: "F.23", decision: "SP", comp: c.type, dcTbl: c.dcTbl, idx: sClass.idx, mps: sClass.mps, bit: m, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    if (m === STAT_MARKER) return ARITH_MARKER;
+                                    if (m === STAT_RST) return ARITH_RST;
+                                    if (m === null) return null;
+
+                                    if (m) {
+                                        stIndex = 20;
+                                        while (true) {
+                                            const sGrow = readPackedCtx(stats, stIndex, 0);
+                                            const b = arithmeticDecoder.decodeBit(sGrow);
+                                            writePackedCtx(stats, stIndex, sGrow);
+                                            pushTrace({ phase: "dc_mag_grow", annex: "F.23", decision: "X1", comp: c.type, dcTbl: c.dcTbl, idx: sGrow.idx, mps: sGrow.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (b === STAT_MARKER) return ARITH_MARKER;
+                                            if (b === STAT_RST) return ARITH_RST;
+                                            if (b === null) return null;
+                                            if (!b) break;
+                                            m <<= 1;
+                                            stIndex += 1;
+                                            if (m === 0x8000) {
+                                                if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    const low = Math.max(0, (cond && cond.L) | 0);
+                                    const high = Math.max(low, (cond && cond.U) | 0);
+                                    const lowThr = (1 << low) >> 1;
+                                    const highThr = (1 << high) >> 1;
+                                    if (m < lowThr) compState.dcContext = 0;
+                                    else if (m > highThr) compState.dcContext = 12 + (sign ? 4 : 0);
+                                    else compState.dcContext = 4 + (sign ? 4 : 0);
+
+                                    let v = m;
+                                    stIndex += 14;
+                                    while (m >>= 1) {
+                                        const sBit = readPackedCtx(stats, stIndex, 0);
+                                        const b = arithmeticDecoder.decodeBit(sBit);
+                                        writePackedCtx(stats, stIndex, sBit);
+                                        pushTrace({ phase: "dc_mag_bits", annex: "F.24", decision: "V", comp: c.type, dcTbl: c.dcTbl, idx: sBit.idx, mps: sBit.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (b === STAT_MARKER) return ARITH_MARKER;
+                                        if (b === STAT_RST) return ARITH_RST;
+                                        if (b === null) return null;
+                                        if (b) v |= m;
+                                    }
+
+                                    v += 1;
+                                    if (sign) v = -v;
+                                    compState.lastDcVal = (compState.lastDcVal + v) | 0;
+                                    return v;
+                                };
+
+                                const decodeArithmeticAcBlock = (blockOffset, c, kFrom = 1, kTo = 63) => {
+                                    const stats = arithmeticState.acStatsByTable[c.acTbl];
+                                    const fixed = arithmeticState.fixedBin;
+                                    const acCond = arithmeticState.acConditioningByTable[c.acTbl];
+                                    const kx = acCond && acCond.Kx ? acCond.Kx : 5;
+                                    let k = kFrom;
+                                    while (k <= kTo) {
+                                        let stIndex = 3 * (k - 1);
+                                        const sEob = readPackedCtx(stats, stIndex, 0);
+                                        const eob = arithmeticDecoder.decodeBit(sEob);
+                                        writePackedCtx(stats, stIndex, sEob);
+                                        pushTrace({ phase: "ac_eob", annex: "F.20", decision: "EOB", comp: c.type, acTbl: c.acTbl, k, idx: sEob.idx, mps: sEob.mps, bit: eob, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
+                                        if (eob) break;
+
+                                        while (true) {
+                                            const sSn = readPackedCtx(stats, stIndex + 1, 0);
+                                            const sn = arithmeticDecoder.decodeBit(sSn);
+                                            writePackedCtx(stats, stIndex + 1, sSn);
+                                            pushTrace({ phase: "ac_sig", annex: "F.20", decision: "SN", comp: c.type, acTbl: c.acTbl, k, idx: sSn.idx, mps: sSn.mps, bit: sn, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (sn === STAT_MARKER || sn === STAT_RST || sn === null) return sn;
+                                            if (sn) break;
+                                            stIndex += 3;
+                                            k++;
+                                            if (k > kTo) {
+                                                if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                return 0;
+                                            }
+                                        }
+
+                                        const sSign = readPackedCtx(fixed, 0, 0);
+                                        const sign = arithmeticDecoder.decodeBit(sSign);
+                                        writePackedCtx(fixed, 0, sSign);
+                                        pushTrace({ phase: "ac_sign", annex: "F.22", decision: "S", comp: c.type, acTbl: c.acTbl, k, idx: sSign.idx, mps: sSign.mps, bit: sign, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (sign === STAT_MARKER || sign === STAT_RST || sign === null) return sign;
+
+                                        stIndex += 2;
+                                        const sClass = readPackedCtx(stats, stIndex, 0);
+                                        let m = arithmeticDecoder.decodeBit(sClass);
+                                        writePackedCtx(stats, stIndex, sClass);
+                                        pushTrace({ phase: "ac_mag_class", annex: "F.23", decision: "SP", comp: c.type, acTbl: c.acTbl, k, idx: sClass.idx, mps: sClass.mps, bit: m, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (m === STAT_MARKER || m === STAT_RST || m === null) return m;
+                                        if (m) {
+                                            const sX = readPackedCtx(stats, stIndex, 0);
+                                            const x = arithmeticDecoder.decodeBit(sX);
+                                            writePackedCtx(stats, stIndex, sX);
+                                            pushTrace({ phase: "ac_mag_x", annex: "F.23", decision: "X", comp: c.type, acTbl: c.acTbl, k, idx: sX.idx, mps: sX.mps, bit: x, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (x === STAT_MARKER || x === STAT_RST || x === null) return x;
+                                            if (x) {
+                                                m <<= 1;
+                                                stIndex = (k <= kx) ? 189 : 217;
+                                                while (true) {
+                                                    const sGrow = readPackedCtx(stats, stIndex, 0);
+                                                    const b = arithmeticDecoder.decodeBit(sGrow);
+                                                    writePackedCtx(stats, stIndex, sGrow);
+                                                    pushTrace({ phase: "ac_mag_grow", annex: "F.23", decision: "X1", comp: c.type, acTbl: c.acTbl, k, idx: sGrow.idx, mps: sGrow.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                    if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                                    if (!b) break;
+                                                    m <<= 1;
+                                                    stIndex += 1;
+                                                    if (m === 0x8000) {
+                                                        if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        let v = m;
+                                        stIndex += 14;
+                                        while (m >>= 1) {
+                                            const sBit = readPackedCtx(stats, stIndex, 0);
+                                            const b = arithmeticDecoder.decodeBit(sBit);
+                                            writePackedCtx(stats, stIndex, sBit);
+                                            pushTrace({ phase: "ac_mag_bits", annex: "F.24", decision: "V", comp: c.type, acTbl: c.acTbl, k, idx: sBit.idx, mps: sBit.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                            if (b) v |= m;
+                                        }
+
+                                        v += 1;
+                                        if (sign) v = -v;
+                                        coeff[blockOffset + zig[k]] = v << Al;
+                                        k++;
+                                    }
+                                    return 0;
+                                };
+                                const decodeArithmeticAcRefineBlock = (blockOffset, c, kFrom, kTo, p1, m1) => {
+                                    const stats = arithmeticState.acStatsByTable[c.acTbl];
+                                    const fixed = arithmeticState.fixedBin;
+                                    let kex = kTo;
+                                    while (kex > 0) {
+                                        if ((coeff[blockOffset + zig[kex]] | 0) !== 0) break;
+                                        kex--;
+                                    }
+
+                                    for (let k = kFrom; k <= kTo; k++) {
+                                        let stBase = 3 * (k - 1);
+                                        if (k > kex) {
+                                            const sEob = readPackedCtx(stats, stBase, 0);
+                                            const eob = arithmeticDecoder.decodeBit(sEob);
+                                            writePackedCtx(stats, stBase, sEob);
+                                            pushTrace({ phase: "ac_refine_eob", annex: "F.27", decision: "EOB", comp: c.type, acTbl: c.acTbl, k, idx: sEob.idx, mps: sEob.mps, bit: eob, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
+                                            if (eob) break;
+                                        }
+
+                                        for (;;) {
+                                            const idx = blockOffset + zig[k];
+                                            const cur = coeff[idx] | 0;
+                                            if (cur !== 0) {
+                                                const sRef = readPackedCtx(stats, stBase + 2, 0);
+                                                const b = arithmeticDecoder.decodeBit(sRef);
+                                                writePackedCtx(stats, stBase + 2, sRef);
+                                                pushTrace({ phase: "ac_refine_existing", annex: "F.27", decision: "REF1", comp: c.type, acTbl: c.acTbl, k, idx: sRef.idx, mps: sRef.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                                if (b) coeff[idx] = (cur < 0) ? (cur + m1) : (cur + p1);
+                                                break;
+                                            }
+
+                                            const sNew = readPackedCtx(stats, stBase + 1, 0);
+                                            const newBit = arithmeticDecoder.decodeBit(sNew);
+                                            writePackedCtx(stats, stBase + 1, sNew);
+                                            pushTrace({ phase: "ac_refine_new", annex: "F.27", decision: "NEW", comp: c.type, acTbl: c.acTbl, k, idx: sNew.idx, mps: sNew.mps, bit: newBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (newBit === STAT_MARKER || newBit === STAT_RST || newBit === null) return newBit;
+                                            if (newBit) {
+                                                const sSign = readPackedCtx(fixed, 0, 0);
+                                                const signBit = arithmeticDecoder.decodeBit(sSign);
+                                                writePackedCtx(fixed, 0, sSign);
+                                                pushTrace({ phase: "ac_refine_sign", annex: "F.27", decision: "S", comp: c.type, acTbl: c.acTbl, k, idx: sSign.idx, mps: sSign.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
+                                                coeff[idx] = signBit ? m1 : p1;
+                                                break;
+                                            }
+
+                                            stBase += 3;
+                                            k++;
+                                            if (k > kTo) {
+                                                if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                return 0;
+                                            }
+                                        }
+                                    }
+                                    return 0;
+                                };
+
+                                // Arithmetic milestone: consume DC and an initial AC pass with context state.
+                                let dcBlocksDecoded = 0;
+                                let acBlocksDecoded = 0;
+                                let arithmeticStopStatus = null;
+                                let rstEvents = 0;
+                                let mcusSinceRestart = 0;
+                                const resetDcOnRestart = (isSequential || isDcFirst);
+                                const resetAcOnRestart = (isSequential || isAcFirst || isAcRefine);
+                                const resetArithmeticRestartState = (consumeMarker = false) => {
+                                    if (consumeMarker && arithmeticDecoder && typeof arithmeticDecoder.consumeRestartMarker === "function") {
+                                        arithmeticDecoder.consumeRestartMarker();
+                                    }
+                                    if (arithmeticDecoder && typeof arithmeticDecoder.resetForRestart === "function") {
+                                        arithmeticDecoder.resetForRestart();
+                                    }
+                                    if (resetDcOnRestart) {
+                                        predDC[0] = 0; predDC[1] = 0; predDC[2] = 0;
+                                        for (const compType of Object.keys(arithmeticState.compStateByType)) {
+                                            arithmeticState.compStateByType[compType].lastDcVal = 0;
+                                            arithmeticState.compStateByType[compType].dcContext = 0;
+                                        }
+                                        for (const tbl of Object.keys(arithmeticState.dcStatsByTable)) {
+                                            arithmeticState.dcStatsByTable[tbl].fill(0);
+                                        }
+                                    }
+                                    if (resetAcOnRestart) {
+                                        for (const tbl of Object.keys(arithmeticState.acStatsByTable)) {
+                                            arithmeticState.acStatsByTable[tbl].fill(0);
+                                        }
+                                    }
+                                    if (resetDcOnRestart) {
+                                        for (const compType of Object.keys(arithmeticState.dcMagnitudeContextByType)) {
+                                            arithmeticState.dcMagnitudeContextByType[compType].fill(0);
+                                        }
+                                    }
+                                    if (resetAcOnRestart) {
+                                        for (const compType of Object.keys(arithmeticState.acBandContextByType)) {
+                                            arithmeticState.acBandContextByType[compType].fill(0);
+                                        }
+                                    }
+                                };
+                                const compByType = {};
+                                for (const c of comps) compByType[c.type] = c;
+                                const decodePlan = [];
+                                const isNonInterleavedScan = (ns === 1 && comps.length === 1);
+                                if (isNonInterleavedScan) {
+                                    const c = comps[0];
+                                    let orderedOffsets = compBlockOffsetsCache[c.type];
+                                    if (!orderedOffsets) {
+                                        const blkIndices = [];
+                                        for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
+                                            const def = mcuStructure.blocks[bIdx];
+                                            const compType = (def.t === "C") ? (def.c === 0 ? 1 : 2) : 0;
+                                            if (compType === c.type) blkIndices.push(bIdx);
+                                        }
+                                        if (blkIndices.length === 0) {
+                                            orderedOffsets = new Int32Array(0);
+                                        } else {
+                                            let hComp = 0, vComp = 0;
+                                            const subToBIdx = [];
+                                            for (const bIdx of blkIndices) {
+                                                const def = mcuStructure.blocks[bIdx];
+                                                if (def.dx + 1 > hComp) hComp = def.dx + 1;
+                                                if (def.dy + 1 > vComp) vComp = def.dy + 1;
+                                                subToBIdx[(def.dy * 8) + def.dx] = bIdx;
+                                            }
+
+                                            const compCols = Math.ceil((w * hComp) / (mcuStructure.hMax * 8));
+                                            const compRows = Math.ceil((h * vComp) / (mcuStructure.vMax * 8));
+                                            const ordered = [];
+                                            for (let by = 0; by < compRows; by++) {
+                                                const mcuY = (by / vComp) | 0;
+                                                const subY = by % vComp;
+                                                for (let bx = 0; bx < compCols; bx++) {
+                                                    const mcuX = (bx / hComp) | 0;
+                                                    const subX = bx % hComp;
+                                                    const bIdx = subToBIdx[(subY * 8) + subX];
+                                                    if (bIdx === undefined) continue;
+                                                    const m = mcuY * cols + mcuX;
+                                                    ordered.push((m * blocksPerMCU + bIdx) * 64);
+                                                }
+                                            }
+                                            orderedOffsets = new Int32Array(ordered.length);
+                                            for (let i = 0; i < ordered.length; i++) orderedOffsets[i] = ordered[i];
+                                        }
+                                        compBlockOffsetsCache[c.type] = orderedOffsets;
+                                    }
+                                    for (let i = 0; i < orderedOffsets.length; i++) {
+                                        decodePlan.push({ blockOffset: orderedOffsets[i], c, endOfMCU: true });
+                                    }
+                                } else {
+                                    for (let m = 0; m < cols * rows; m++) {
+                                        let lastInMcu = -1;
+                                        for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
+                                            const blk = blockList[m * blocksPerMCU + bIdx];
+                                            if (!blk) continue;
+                                            const c = compByType[blk.comp];
+                                            if (!c) continue;
+                                            decodePlan.push({ blockOffset: (m * blocksPerMCU + bIdx) * 64, c, endOfMCU: false });
+                                            lastInMcu = decodePlan.length - 1;
+                                        }
+                                        if (lastInMcu >= 0) decodePlan[lastInMcu].endOfMCU = true;
+                                    }
+                                }
+                                outerArithmeticLoop:
+                                for (let step = 0; step < decodePlan.length; step++) {
+                                            const { blockOffset, c, endOfMCU } = decodePlan[step];
+                                            if (blockOffset + 64 > coeff.length) break outerArithmeticLoop;
+
+                                            if (isSequential || isDcFirst) {
+                                                const diff = decodeArithmeticDcDiff(c);
+                                                if (diff === ARITH_RST) {
+                                                    rstEvents++;
+                                                    resetArithmeticRestartState(true);
+                                                    continue;
+                                                }
+                                                if (diff === ARITH_MARKER || diff === STAT_BAD_CODE || diff === null) {
+                                                    arithmeticStopStatus = diff;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                const compState = arithmeticState.compStateByType[c.type];
+                                                coeff[blockOffset] = (compState.lastDcVal | 0) << Al;
+                                                dcBlocksDecoded++;
+                                            } else if (isDcRefine) {
+                                                // DC refinement: fixed 0.5 bin, set bit Al when decoded bit is 1.
+                                                const fixed = arithmeticState.fixedBin;
+                                                const sRef = readPackedCtx(fixed, 0, 0);
+                                                const bit = arithmeticDecoder.decodeBit(sRef);
+                                                writePackedCtx(fixed, 0, sRef);
+                                                pushTrace({ phase: "dc_refine", annex: "F.26", decision: "REF", comp: c.type, dcTbl: c.dcTbl, idx: sRef.idx, mps: sRef.mps, bit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) {
+                                                    if (bit === STAT_RST) {
+                                                        rstEvents++;
+                                                        resetArithmeticRestartState(true);
+                                                        continue;
+                                                    }
+                                                    arithmeticStopStatus = bit;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                if (bit === 1) coeff[blockOffset] |= (1 << Al);
+                                                dcBlocksDecoded++;
+                                            }
+
+                                            if (isSequential || isAcFirst) {
+                                                const acStart = isSequential ? 1 : Ss;
+                                                const acEnd = isSequential ? 63 : Se;
+                                                const acStatus = decodeArithmeticAcBlock(blockOffset, c, acStart, acEnd);
+                                                if (acStatus === STAT_RST) {
+                                                    rstEvents++;
+                                                    resetArithmeticRestartState(true);
+                                                    continue;
+                                                }
+                                                if (acStatus === STAT_MARKER || acStatus === STAT_BAD_CODE || acStatus === null) {
+                                                    arithmeticStopStatus = acStatus;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                acBlocksDecoded++;
+                                            } else if (isAcRefine) {
+                                                const acRefineStatus = decodeArithmeticAcRefineBlock(blockOffset, c, Ss, Se, p1, m1);
+                                                if (acRefineStatus === STAT_RST) {
+                                                    rstEvents++;
+                                                    resetArithmeticRestartState(true);
+                                                    continue;
+                                                }
+                                                if (acRefineStatus === STAT_MARKER || acRefineStatus === STAT_BAD_CODE || acRefineStatus === null) {
+                                                    arithmeticStopStatus = acRefineStatus;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                acBlocksDecoded++;
+                                            }
+                                    if (endOfMCU && restartIntervalMCUs > 0) {
+                                        mcusSinceRestart++;
+                                        if (mcusSinceRestart >= restartIntervalMCUs) {
+                                            resetArithmeticRestartState(true);
+                                            mcusSinceRestart = 0;
+                                        }
+                                    }
+                                }
+
+                                if (arithmeticStopStatus === STAT_BAD_CODE) {
+                                    throw new Error(`Arithmetic JPEG staged decode aborted on bad arithmetic code (dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
+                                }
+                                if (arithmeticStopStatus !== null && arithmeticStopStatus !== STAT_MARKER) {
+                                    throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
+                                }
+                                if (JpegCORE.Config.strictArithmeticDecode) {
+                                    const last = arithmeticTrace.length ? arithmeticTrace[arithmeticTrace.length - 1] : null;
+                                    const traceLimit = Math.max(1, (JpegCORE.Config.arithmeticTraceLimit | 0) || 128);
+                                    const traceLimitHit = arithmeticTrace.length >= traceLimit;
+                                    const where = last
+                                        ? ` step=${arithmeticTrace.length} phase=${last.phase} comp=${last.comp}${(typeof last.k === "number") ? ` k=${last.k}` : ""}${(typeof last.run === "number") ? ` run=${last.run}` : ""}`
+                                        : ` step=0`;
+                                    const preview = arithmeticTrace.length ? ` trace=[${compactTrace(6)}]` : "";
+                                    const focus = arithmeticTrace.length ? ` focus=[${traceWindow(arithmeticTrace.length, 4)}]` : "";
+                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (${where}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}, traceLimit=${traceLimit}, traceLimitHit=${traceLimitHit}).${preview}${focus}`);
+                                }
+                                // Arithmetic staged path completed for this scan.
+                                // Keep marker parser aligned for potential following segments/scans.
+                                pos = reader.pos;
+                                const unread = (arithmeticDecoder && typeof arithmeticDecoder.getUnreadMarkerInfo === "function")
+                                    ? arithmeticDecoder.getUnreadMarkerInfo()
+                                    : null;
+                                if (unread && typeof unread.ffPos === "number" && unread.ffPos >= 0) {
+                                    pos = unread.ffPos;
+                                }
+                                if (pos > 0 && pos < d.length && d[pos] !== 0xFF && d[pos - 1] === 0xFF) {
+                                    pos--;
+                                }
+                                continue;
+                            }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
                             reader.pos= sosEnd;
@@ -699,14 +1285,34 @@
                                 tables[tc][th] = makeTree(nr, val);
                             }
                             pos = end;
+                        } else if (marker === M.DAC) {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            if (pos + 1 + len > d.length) break;
+                            parseDacSegment(pos + 3, pos + 1 + len);
+                            pos += 1 + len;
+                        } else if (marker === M.DRI) {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            if (pos + 1 + len > d.length) break;
+                            if (len >= 4 && pos + 4 < d.length) {
+                                restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
+                            }
+                            pos += 1 + len;
                         } else if (marker === M.EOI) { break; }
                         else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
                     }
-                } catch (e) { console.warn("Robust Decode Warning:", e); }
+                } catch (e) {
+                    if (e && typeof e.message === "string" && e.message.includes("Arithmetic JPEG")) {
+                        throw e;
+                    }
+                    console.warn("Robust Decode Warning:", e);
+                }
 
-                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, decodeBackend: 'internal' };
+                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, restartIntervalMCUs, decodeBackend: 'internal' };
 
             } catch (globalErr) {
+                if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic JPEG")) {
+                    throw globalErr;
+                }
                 console.error("Critical Decoder Failure:", globalErr);
                 return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
             }

@@ -12,15 +12,21 @@
 * - Standard: Encode, Decode (Scale-on-Load), Transform, Analysis
 */
 
+const JPEGCORE_BUILD_FLAGS = {"arithmetic":true};
 const JpegCORE = {
     Config: {
-        nativeProgressiveDecode: false
+        nativeProgressiveDecode: false,
+        enableArithmeticDecode: !(typeof JPEGCORE_BUILD_FLAGS === "object" && JPEGCORE_BUILD_FLAGS && JPEGCORE_BUILD_FLAGS.arithmetic === false),
+        strictArithmeticDecode: false,
+        strictArithmeticFailFast: false,
+        arithmeticTraceLimit: 4096
     },
     // --- 1. CONSTANTS ---
     Constants: {
       MARKERS: {
-          SOI: 0xD8, EOI: 0xD9, SOF0: 0xC0, SOF2: 0xC2, DHT: 0xC4,
-          DQT: 0xDB, SOS: 0xDA, APP0: 0xE0, APP1: 0xE1, COM: 0xFE, RST0: 0xD0, RST7: 0xD7
+          SOI: 0xD8, EOI: 0xD9, SOF0: 0xC0, SOF2: 0xC2, SOF9: 0xC9, DHT: 0xC4,
+          DAC: 0xCC,
+          DQT: 0xDB, DRI: 0xDD, SOS: 0xDA, APP0: 0xE0, APP1: 0xE1, COM: 0xFE, RST0: 0xD0, RST7: 0xD7
       },
       ZIG_ZAG: new Int32Array([0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]),
 
@@ -214,6 +220,314 @@ const JpegCORE = {
                 this.bitCount = 0;
                 this.bitBuffer = 0;
             }
+        },
+
+        // --- 3. ARITHMETIC DECODER (JPEG T.81 groundwork) ---
+        // This is the shared stateful arithmetic core used by SOF9 decoding paths.
+        // The full coefficient decode wiring is implemented incrementally in decoder.js.
+        ArithmeticDecoder: class {
+            static QM_TABLE = [
+                { qe: 0x5a1d, nlps: 1, nmps: 1, switchMps: 1 },
+                { qe: 0x2586, nlps: 14, nmps: 2, switchMps: 0 },
+                { qe: 0x1114, nlps: 16, nmps: 3, switchMps: 0 },
+                { qe: 0x080b, nlps: 18, nmps: 4, switchMps: 0 },
+                { qe: 0x03d8, nlps: 20, nmps: 5, switchMps: 0 },
+                { qe: 0x01da, nlps: 23, nmps: 6, switchMps: 0 },
+                { qe: 0x00e5, nlps: 25, nmps: 7, switchMps: 0 },
+                { qe: 0x006f, nlps: 28, nmps: 8, switchMps: 0 },
+                { qe: 0x0036, nlps: 30, nmps: 9, switchMps: 0 },
+                { qe: 0x001a, nlps: 33, nmps: 10, switchMps: 0 },
+                { qe: 0x000d, nlps: 35, nmps: 11, switchMps: 0 },
+                { qe: 0x0006, nlps: 9, nmps: 12, switchMps: 0 },
+                { qe: 0x0003, nlps: 10, nmps: 13, switchMps: 0 },
+                { qe: 0x0001, nlps: 12, nmps: 13, switchMps: 0 },
+                { qe: 0x5a7f, nlps: 15, nmps: 15, switchMps: 1 },
+                { qe: 0x3f25, nlps: 36, nmps: 16, switchMps: 0 },
+                { qe: 0x2cf2, nlps: 38, nmps: 17, switchMps: 0 },
+                { qe: 0x207c, nlps: 39, nmps: 18, switchMps: 0 },
+                { qe: 0x17b9, nlps: 40, nmps: 19, switchMps: 0 },
+                { qe: 0x1182, nlps: 42, nmps: 20, switchMps: 0 },
+                { qe: 0x0cef, nlps: 43, nmps: 21, switchMps: 0 },
+                { qe: 0x09a1, nlps: 45, nmps: 22, switchMps: 0 },
+                { qe: 0x072f, nlps: 46, nmps: 23, switchMps: 0 },
+                { qe: 0x055c, nlps: 48, nmps: 24, switchMps: 0 },
+                { qe: 0x0406, nlps: 49, nmps: 25, switchMps: 0 },
+                { qe: 0x0303, nlps: 51, nmps: 26, switchMps: 0 },
+                { qe: 0x0240, nlps: 52, nmps: 27, switchMps: 0 },
+                { qe: 0x01b1, nlps: 54, nmps: 28, switchMps: 0 },
+                { qe: 0x0144, nlps: 56, nmps: 29, switchMps: 0 },
+                { qe: 0x00f5, nlps: 57, nmps: 30, switchMps: 0 },
+                { qe: 0x00b7, nlps: 59, nmps: 31, switchMps: 0 },
+                { qe: 0x008a, nlps: 60, nmps: 32, switchMps: 0 },
+                { qe: 0x0068, nlps: 62, nmps: 33, switchMps: 0 },
+                { qe: 0x004e, nlps: 63, nmps: 34, switchMps: 0 },
+                { qe: 0x003b, nlps: 32, nmps: 35, switchMps: 0 },
+                { qe: 0x002c, nlps: 33, nmps: 9, switchMps: 0 },
+                { qe: 0x5ae1, nlps: 37, nmps: 37, switchMps: 1 },
+                { qe: 0x484c, nlps: 64, nmps: 38, switchMps: 0 },
+                { qe: 0x3a0d, nlps: 65, nmps: 39, switchMps: 0 },
+                { qe: 0x2ef1, nlps: 67, nmps: 40, switchMps: 0 },
+                { qe: 0x261f, nlps: 68, nmps: 41, switchMps: 0 },
+                { qe: 0x1f33, nlps: 69, nmps: 42, switchMps: 0 },
+                { qe: 0x19a8, nlps: 70, nmps: 43, switchMps: 0 },
+                { qe: 0x1518, nlps: 72, nmps: 44, switchMps: 0 },
+                { qe: 0x1177, nlps: 73, nmps: 45, switchMps: 0 },
+                { qe: 0x0e74, nlps: 74, nmps: 46, switchMps: 0 },
+                { qe: 0x0bfb, nlps: 75, nmps: 47, switchMps: 0 },
+                { qe: 0x09f8, nlps: 77, nmps: 48, switchMps: 0 },
+                { qe: 0x0861, nlps: 78, nmps: 49, switchMps: 0 },
+                { qe: 0x0706, nlps: 79, nmps: 50, switchMps: 0 },
+                { qe: 0x05cd, nlps: 48, nmps: 51, switchMps: 0 },
+                { qe: 0x04de, nlps: 50, nmps: 52, switchMps: 0 },
+                { qe: 0x040f, nlps: 50, nmps: 53, switchMps: 0 },
+                { qe: 0x0363, nlps: 51, nmps: 54, switchMps: 0 },
+                { qe: 0x02d4, nlps: 52, nmps: 55, switchMps: 0 },
+                { qe: 0x025c, nlps: 53, nmps: 56, switchMps: 0 },
+                { qe: 0x01f8, nlps: 54, nmps: 57, switchMps: 0 },
+                { qe: 0x01a4, nlps: 55, nmps: 58, switchMps: 0 },
+                { qe: 0x0160, nlps: 56, nmps: 59, switchMps: 0 },
+                { qe: 0x0125, nlps: 57, nmps: 60, switchMps: 0 },
+                { qe: 0x00f6, nlps: 58, nmps: 61, switchMps: 0 },
+                { qe: 0x00cb, nlps: 59, nmps: 62, switchMps: 0 },
+                { qe: 0x00ab, nlps: 61, nmps: 63, switchMps: 0 },
+                { qe: 0x008f, nlps: 61, nmps: 32, switchMps: 0 },
+                { qe: 0x5b12, nlps: 65, nmps: 65, switchMps: 1 },
+                { qe: 0x4d04, nlps: 80, nmps: 66, switchMps: 0 },
+                { qe: 0x412c, nlps: 81, nmps: 67, switchMps: 0 },
+                { qe: 0x37d8, nlps: 82, nmps: 68, switchMps: 0 },
+                { qe: 0x2fe8, nlps: 83, nmps: 69, switchMps: 0 },
+                { qe: 0x293c, nlps: 84, nmps: 70, switchMps: 0 },
+                { qe: 0x2379, nlps: 86, nmps: 71, switchMps: 0 },
+                { qe: 0x1edf, nlps: 87, nmps: 72, switchMps: 0 },
+                { qe: 0x1aa9, nlps: 87, nmps: 73, switchMps: 0 },
+                { qe: 0x174e, nlps: 72, nmps: 74, switchMps: 0 },
+                { qe: 0x1424, nlps: 72, nmps: 75, switchMps: 0 },
+                { qe: 0x119c, nlps: 74, nmps: 76, switchMps: 0 },
+                { qe: 0x0f6b, nlps: 74, nmps: 77, switchMps: 0 },
+                { qe: 0x0d51, nlps: 75, nmps: 78, switchMps: 0 },
+                { qe: 0x0bb6, nlps: 77, nmps: 79, switchMps: 0 },
+                { qe: 0x0a40, nlps: 77, nmps: 48, switchMps: 0 },
+                { qe: 0x5832, nlps: 80, nmps: 81, switchMps: 1 },
+                { qe: 0x4d1c, nlps: 88, nmps: 82, switchMps: 0 },
+                { qe: 0x438e, nlps: 89, nmps: 83, switchMps: 0 },
+                { qe: 0x3bdd, nlps: 90, nmps: 84, switchMps: 0 },
+                { qe: 0x34ee, nlps: 91, nmps: 85, switchMps: 0 },
+                { qe: 0x2eae, nlps: 92, nmps: 86, switchMps: 0 },
+                { qe: 0x299a, nlps: 93, nmps: 87, switchMps: 0 },
+                { qe: 0x2516, nlps: 86, nmps: 71, switchMps: 0 },
+                { qe: 0x5570, nlps: 88, nmps: 89, switchMps: 1 },
+                { qe: 0x4ca9, nlps: 95, nmps: 90, switchMps: 0 },
+                { qe: 0x44d9, nlps: 96, nmps: 91, switchMps: 0 },
+                { qe: 0x3e22, nlps: 97, nmps: 92, switchMps: 0 },
+                { qe: 0x3824, nlps: 99, nmps: 93, switchMps: 0 },
+                { qe: 0x32b4, nlps: 99, nmps: 94, switchMps: 0 },
+                { qe: 0x2e17, nlps: 93, nmps: 86, switchMps: 0 },
+                { qe: 0x56a8, nlps: 95, nmps: 96, switchMps: 1 },
+                { qe: 0x4f46, nlps: 101, nmps: 97, switchMps: 0 },
+                { qe: 0x47e5, nlps: 102, nmps: 98, switchMps: 0 },
+                { qe: 0x41cf, nlps: 103, nmps: 99, switchMps: 0 },
+                { qe: 0x3c3d, nlps: 104, nmps: 100, switchMps: 0 },
+                { qe: 0x375e, nlps: 99, nmps: 93, switchMps: 0 },
+                { qe: 0x5231, nlps: 105, nmps: 102, switchMps: 0 },
+                { qe: 0x4c0f, nlps: 106, nmps: 103, switchMps: 0 },
+                { qe: 0x4639, nlps: 107, nmps: 104, switchMps: 0 },
+                { qe: 0x415e, nlps: 103, nmps: 99, switchMps: 0 },
+                { qe: 0x5627, nlps: 105, nmps: 106, switchMps: 1 },
+                { qe: 0x50e7, nlps: 108, nmps: 107, switchMps: 0 },
+                { qe: 0x4b85, nlps: 109, nmps: 103, switchMps: 0 },
+                { qe: 0x5597, nlps: 110, nmps: 109, switchMps: 0 },
+                { qe: 0x504f, nlps: 111, nmps: 107, switchMps: 0 },
+                { qe: 0x5a10, nlps: 110, nmps: 111, switchMps: 1 },
+                { qe: 0x5522, nlps: 112, nmps: 109, switchMps: 0 },
+                { qe: 0x59eb, nlps: 112, nmps: 111, switchMps: 1 },
+                { qe: 0x5a1d, nlps: 113, nmps: 113, switchMps: 0 }
+            ];
+
+            constructor(bitReader) {
+                this.reader = bitReader;
+                this.c = 0;
+                this.a = 0;
+                this.ct = -16;
+                this.initialized = false;
+                this.entropyByte = 0;
+                this.entropyBitsLeft = 0;
+                this.unreadMarker = 0;
+                this.unreadMarkerFFPos = -1;
+                this.unreadMarkerCodePos = -1;
+            }
+
+            createContextState(initialMps = 0, initialIdx = 0) {
+                return { mps: initialMps ? 1 : 0, idx: initialIdx | 0 };
+            }
+
+            getQeEntry(index) {
+                const table = this.constructor.QM_TABLE;
+                if (index < 0) return table[0];
+                if (index >= table.length) return table[table.length - 1];
+                return table[index];
+            }
+
+            _byteInRaw() {
+                const d = this.reader.d;
+                if (this.reader.pos >= d.length) return null;
+                return d[this.reader.pos++];
+            }
+
+            _nextEntropyBit() {
+                if (this.entropyBitsLeft <= 0) {
+                    const b = this._byteIn();
+                    if (b === null || b < 0) return b;
+                    this.entropyByte = b;
+                    this.entropyBitsLeft = 8;
+                }
+                const out = (this.entropyByte >> (this.entropyBitsLeft - 1)) & 1;
+                this.entropyBitsLeft--;
+                return out;
+            }
+
+            initialize() {
+                this.reader.reset();
+                this.entropyBitsLeft = 0;
+                this.unreadMarker = 0;
+                this.unreadMarkerFFPos = -1;
+                this.unreadMarkerCodePos = -1;
+                this.c = 0;
+                this.a = 0;
+                this.ct = -16;
+                this.initialized = true;
+                return 0;
+            }
+
+            resetForRestart() {
+                // Mirror libjpeg-style restart resync for arithmetic coder registers.
+                this.c = 0;
+                this.a = 0;
+                this.ct = -16;
+                this.initialized = false;
+                this.entropyByte = 0;
+                this.entropyBitsLeft = 0;
+                this.unreadMarker = 0;
+                this.unreadMarkerFFPos = -1;
+                this.unreadMarkerCodePos = -1;
+            }
+
+            consumeRestartMarker() {
+                if (this.unreadMarker >= 0xd0 && this.unreadMarker <= 0xd7 && this.unreadMarkerCodePos >= 0) {
+                    this.reader.pos = this.unreadMarkerCodePos + 1;
+                    this.unreadMarker = 0;
+                    this.unreadMarkerFFPos = -1;
+                    this.unreadMarkerCodePos = -1;
+                    return true;
+                }
+                const d = this.reader.d;
+                let p = this.reader.pos | 0;
+                while (p < d.length && d[p] !== 0xff) p++;
+                if (p >= d.length) return false;
+                while (p < d.length && d[p] === 0xff) p++;
+                if (p >= d.length) return false;
+                const code = d[p];
+                if (code >= 0xd0 && code <= 0xd7) {
+                    this.reader.pos = p + 1;
+                    this.unreadMarker = 0;
+                    this.unreadMarkerFFPos = -1;
+                    this.unreadMarkerCodePos = -1;
+                    return true;
+                }
+                return false;
+            }
+
+            _renorm() {
+                while (this.a < 0x8000) {
+                    if (--this.ct < 0) {
+                        let data = 0;
+                        if (!this.unreadMarker) {
+                            data = this._byteInRaw();
+                            if (data === null) return null;
+                            if (data === 0xff) {
+                                const ffPos = (this.reader.pos - 1) | 0;
+                                do {
+                                    data = this._byteInRaw();
+                                    if (data === null) return null;
+                                } while (data === 0xff);
+                                if (data === 0x00) data = 0xff;
+                                else {
+                                    this.unreadMarker = data;
+                                    this.unreadMarkerFFPos = ffPos;
+                                    this.unreadMarkerCodePos = (this.reader.pos - 1) | 0;
+                                    data = 0;
+                                }
+                            }
+                        }
+                        this.c = ((this.c << 8) | data) >>> 0;
+                        if ((this.ct += 8) < 0) {
+                            if (++this.ct === 0) this.a = 0x8000;
+                        }
+                    }
+                    this.a <<= 1;
+                }
+                return 0;
+            }
+
+            // Temporary placeholder until full QM-state machine is wired.
+            decodeBypassBit() {
+                return this._nextEntropyBit();
+            }
+
+            // API-compatible context decode hook.
+            // Stage 2: register-based A/C update + renormalization.
+            decodeBit(contextState) {
+                if (!contextState) contextState = this.createContextState(0, 0);
+                if (!this.initialized) {
+                    const st = this.initialize();
+                    if (st === null || st < 0) return st;
+                }
+                const preRenorm = this._renorm();
+                if (preRenorm === null || preRenorm < 0) return preRenorm;
+                const qe = this.getQeEntry(contextState.idx | 0);
+                const qev = qe.qe >>> 0;
+                let svMps = contextState.mps ? 1 : 0;
+
+                let temp = (this.a - qev) >>> 0;
+                this.a = temp;
+                const shifted = (temp << this.ct) >>> 0;
+
+                let decodedBit;
+                if ((this.c >>> 0) >= shifted) {
+                    this.c = ((this.c - shifted) >>> 0);
+                    if (this.a < qev) {
+                        this.a = qev;
+                        contextState.idx = qe.nmps;
+                        decodedBit = svMps;
+                    } else {
+                        this.a = qev;
+                        contextState.idx = qe.nlps;
+                        decodedBit = svMps ^ 1;
+                        if (qe.switchMps) contextState.mps ^= 1;
+                    }
+                } else if (this.a < 0x8000) {
+                    if (this.a < qev) {
+                        contextState.idx = qe.nlps;
+                        decodedBit = svMps ^ 1;
+                        if (qe.switchMps) contextState.mps ^= 1;
+                    } else {
+                        contextState.idx = qe.nmps;
+                        decodedBit = svMps;
+                    }
+                } else {
+                    decodedBit = svMps;
+                }
+
+                return decodedBit;
+            }
+
+            getUnreadMarkerInfo() {
+                if (!this.unreadMarker) return null;
+                return {
+                    marker: this.unreadMarker,
+                    ffPos: this.unreadMarkerFFPos,
+                    codePos: this.unreadMarkerCodePos
+                };
+            }
         }
     },
 
@@ -326,7 +640,11 @@ const JpegCORE = {
                 const ZZ = JpegCORE.Constants.ZIG_ZAG_ARR;
                 let pos = 0, qtL = null, qtC = null;
                 const meta = [];
-                let infoStr = "", detectedSamp = '420';
+                let infoStr = "", detectedSamp = '420', detectedProgressive = false, detectedArithmetic = false;
+                let detectedWidth = 0, detectedHeight = 0;
+                let restartIntervalMCUs = 0;
+                const arithmeticDcTables = {};
+                const arithmeticAcTables = {};
                 let detectedOrientation = null;
                 const rawHuff = { 0: {}, 1: {} };
 
@@ -338,9 +656,17 @@ const JpegCORE = {
                         if (type >= M.SOF0 && type <= M.COM) {
                             const len = (d[pos + 2] << 8) | d[pos + 3];
                             const fullSegment = d.slice(pos, pos + 2 + len);
-                            if (type === M.SOF0) {
+                            if (type === M.SOF0 || type === M.SOF2 || type === M.SOF9) {
+                                detectedProgressive = (type === M.SOF2);
+                                detectedArithmetic = (type === M.SOF9);
+                                detectedHeight = ((d[pos + 5] << 8) | d[pos + 6]) >>> 0;
+                                detectedWidth = ((d[pos + 7] << 8) | d[pos + 8]) >>> 0;
                                 const ySamp = d[pos + 11];
-                                if (ySamp === 0x22) detectedSamp = '420'; else if (ySamp === 0x21) detectedSamp = '422'; else if (ySamp === 0x11) detectedSamp = '444';
+                                const numComps = d[pos + 9];
+                                if (numComps === 1) detectedSamp = 'GRAY';
+                                else if (ySamp === 0x22) detectedSamp = '420';
+                                else if (ySamp === 0x21) detectedSamp = '422';
+                                else if (ySamp === 0x11) detectedSamp = '444';
                                 infoStr += `[Fmt:${detectedSamp}] `;
                             } else if (type === M.DQT) {
                                 let subPos = pos + 4, end = pos + 2 + len;
@@ -364,6 +690,30 @@ const JpegCORE = {
                                     const val = Array.from(d.slice(subPos, subPos + count)); subPos += count;
                                     if (rawHuff[tc]) rawHuff[tc][th] = { n: nr, v: val };
                                 }
+                            } else if (type === M.DRI) {
+                                restartIntervalMCUs = ((d[pos + 4] << 8) | d[pos + 5]) >>> 0;
+                            } else if (type === M.DAC) {
+                                let subPos = pos + 4, end = pos + 2 + len;
+                                while (subPos + 1 < end) {
+                                    const tcTb = d[subPos++];
+                                    const cond = d[subPos++];
+                                    const tc = (tcTb >> 4) & 0x0F;
+                                    const tb = tcTb & 0x0F;
+                                    if (tb > 3) continue;
+                                    if (tc === 0) {
+                                        const U = (cond >> 4) & 0x0F;
+                                        const L = cond & 0x0F;
+                                        if (L <= U) {
+                                            arithmeticDcTables[tb] = { L, U };
+                                        }
+                                    } else if (tc === 1) {
+                                        const Kx = cond & 0x3F;
+                                        if (Kx >= 1 && Kx <= 63) {
+                                            arithmeticAcTables[tb] = { Kx };
+                                        }
+                                    }
+                                }
+                                detectedArithmetic = true;
                             } else if ((type >= M.APP0 && type <= 0xEF) || type === M.COM) {
                                 meta.push(fullSegment);
                                 const label = (type === M.COM) ? "COM" : "APP" + (type - 0xE0);
@@ -392,7 +742,14 @@ const JpegCORE = {
                 if (foundCustom) infoStr += "[Huffman:Custom] "; else infoStr += "[Huffman:Std] ";
 
                 return {
+                    width: detectedWidth,
+                    height: detectedHeight,
                     detectedMode: detectedSamp,
+                    detectedProgressive: detectedProgressive,
+                    detectedArithmetic: detectedArithmetic,
+                    restartIntervalMCUs: restartIntervalMCUs,
+                    arithmeticDcTables: arithmeticDcTables,
+                    arithmeticAcTables: arithmeticAcTables,
                     detectedHuffman: foundCustom ? extractedHuff : null,
                     detectedMetaSegments: meta,
                     detectedOrientation: detectedOrientation,
@@ -596,10 +953,13 @@ const JpegCORE = {
                 // Wir nutzen die neuen Utility-Funktionen
                 const utils = JpegCORE.Utils;
                 const makeTree = utils.makeHuffmanTree;
+                const ArithmeticDecoder = utils.ArithmeticDecoder;
 
                 // STATUS CODES
                 const STAT_MARKER = -1;
                 const STAT_RST = -2;
+                const STAT_BAD_CODE = -2147483648;
+                const arithmeticTables = { dc: {}, ac: {} };
 
                 // --- Robust Bit Reader Instanz ---
                 // Wir erstellen den Reader. Er bekommt das Daten-Array 'd'.
@@ -698,10 +1058,69 @@ const JpegCORE = {
                 if (d.length < 2) throw new Error("File too short");
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
                 let isProgressive = false;
+                let isArithmetic = false;
+                let restartIntervalMCUs = 0;
                 let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
 
                 if (d[0] === 0xFF && d[1] === M.SOI) pos = 2;
+                const parseDacSegment = (start, end) => {
+                    let subPos = start;
+                    while (subPos + 1 < end) {
+                        const tableClassAndId = d[subPos++];
+                        const conditioning = d[subPos++];
+                        const tc = (tableClassAndId >> 4) & 0x0F;
+                        const tb = tableClassAndId & 0x0F;
+                        if (tb > 3) continue;
+
+                        if (tc === 0) {
+                            const U = (conditioning >> 4) & 0x0F;
+                            const L = conditioning & 0x0F;
+                            if (L <= U) {
+                                arithmeticTables.dc[tb] = { L, U };
+                            }
+                        } else if (tc === 1) {
+                            const Kx = conditioning & 0x3F;
+                            if (Kx >= 1 && Kx <= 63) {
+                                arithmeticTables.ac[tb] = { Kx };
+                            }
+                        }
+                    }
+                };
+                const buildArithmeticScanState = (compsForScan) => {
+                    const dcStatsByTable = {};
+                    const acStatsByTable = {};
+                    const compStateByType = {};
+                    const dcConditioningByTable = {};
+                    const acConditioningByTable = {};
+                    const dcMagnitudeContextByType = {};
+                    const acBandContextByType = {};
+
+                    for (const c of compsForScan) {
+                        if (!dcStatsByTable[c.dcTbl]) dcStatsByTable[c.dcTbl] = new Uint8Array(64);
+                        if (!acStatsByTable[c.acTbl]) acStatsByTable[c.acTbl] = new Uint8Array(256);
+                        if (!dcConditioningByTable[c.dcTbl]) {
+                            dcConditioningByTable[c.dcTbl] = arithmeticTables.dc[c.dcTbl] || { L: 0, U: 1 };
+                        }
+                        if (!acConditioningByTable[c.acTbl]) {
+                            acConditioningByTable[c.acTbl] = arithmeticTables.ac[c.acTbl] || { Kx: 5 };
+                        }
+                        if (!compStateByType[c.type]) compStateByType[c.type] = { lastDcVal: 0, dcContext: 0 };
+                        if (!dcMagnitudeContextByType[c.type]) dcMagnitudeContextByType[c.type] = new Uint8Array(64);
+                        if (!acBandContextByType[c.type]) acBandContextByType[c.type] = new Uint8Array(256);
+                    }
+
+                    return {
+                        dcStatsByTable,
+                        acStatsByTable,
+                        compStateByType,
+                        dcConditioningByTable,
+                        acConditioningByTable,
+                        dcMagnitudeContextByType,
+                        acBandContextByType,
+                        fixedBin: new Uint8Array([113 & 0x7f])
+                    };
+                };
 
                 while (pos < d.length - 1) {
                     if (d[pos] !== 0xFF) { pos++; continue; }
@@ -716,8 +1135,9 @@ const JpegCORE = {
                     const segmentEnd = pos + 1 + len;
                     if (segmentEnd > d.length) break;
 
-                    if (marker === M.SOF0 || marker === M.SOF2) {
+                    if (marker === M.SOF0 || marker === M.SOF2 || marker === M.SOF9) {
                         isProgressive = (marker === M.SOF2);
+                        isArithmetic = (marker === M.SOF9);
                         h = (d[pos + 4] << 8) | d[pos + 5];
                         w = (d[pos + 6] << 8) | d[pos + 7];
                         const numComps = d[pos + 8];
@@ -759,6 +1179,12 @@ const JpegCORE = {
                             for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10;
                             quantTables[id] = naturalTbl;
                         }
+                    } else if (marker === M.DRI) {
+                        if (pos + 5 < d.length) {
+                            restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
+                        }
+                    } else if (marker === M.DAC) {
+                        parseDacSegment(pos + 3, segmentEnd);
                     }
                     pos = segmentEnd;
                 }
@@ -861,6 +1287,523 @@ const JpegCORE = {
                             const kStart = (Ss > 1) ? Ss : 1;
                             const coeff = coeffBuffer;
                             const zig = ZZ;
+
+                            if (isArithmetic) {
+                                if (JpegCORE.Config.enableArithmeticDecode === false) {
+                                    throw new Error("Arithmetic JPEG support is disabled in this build/config.");
+                                }
+                                const dcCount = Object.keys(arithmeticTables.dc).length;
+                                const acCount = Object.keys(arithmeticTables.ac).length;
+                                const isSequential = (Ss === 0 && Se === 63 && Ah === 0);
+                                const isDcFirst = (Ss === 0 && Se === 0 && Ah === 0);
+                                const isAcFirst = (Ss > 0 && Se <= 63 && Ah === 0);
+                                const isDcRefine = (Ss === 0 && Se === 0 && Ah > 0);
+                                const isAcRefine = (Ss > 0 && Se <= 63 && Ah > 0);
+                                if (!(isSequential || isDcFirst || isAcFirst || isDcRefine || isAcRefine)) {
+                                    throw new Error(`Arithmetic JPEG scan mode not supported yet (Ss=${Ss}, Se=${Se}, Ah=${Ah}, Al=${Al}; DAC DC=${dcCount}, AC=${acCount}).`);
+                                }
+                                const p1 = 1 << Al;
+                                const m1 = (-1) << Al;
+
+                                for (const c of comps) {
+                                    if (!arithmeticTables.dc[c.dcTbl]) {
+                                        throw new Error(`Arithmetic JPEG missing DC conditioning table ${c.dcTbl} for component type ${c.type}.`);
+                                    }
+                                    if (!arithmeticTables.ac[c.acTbl]) {
+                                        throw new Error(`Arithmetic JPEG missing AC conditioning table ${c.acTbl} for component type ${c.type}.`);
+                                    }
+                                }
+                                const arithmeticState = buildArithmeticScanState(comps);
+                                const dcStateTables = Object.keys(arithmeticState.dcStatsByTable).length;
+                                const acStateTables = Object.keys(arithmeticState.acStatsByTable).length;
+                                const dcCompContexts = Object.keys(arithmeticState.dcMagnitudeContextByType).length;
+                                const acCompContexts = Object.keys(arithmeticState.acBandContextByType).length;
+                                const traceLimit = (JpegCORE.Config.arithmeticTraceLimit | 0) > 0 ? (JpegCORE.Config.arithmeticTraceLimit | 0) : 0;
+                                const arithmeticTrace = [];
+                                const arithmeticFailFast = !!JpegCORE.Config.strictArithmeticFailFast;
+                                const ARITH_RST = { kind: "ARITH_RST" };
+                                const ARITH_MARKER = { kind: "ARITH_MARKER" };
+                                const pushTrace = (entry) => {
+                                    if (traceLimit <= 0) return;
+                                    if (arithmeticTrace.length >= traceLimit) return;
+                                    arithmeticTrace.push(entry);
+                                };
+                                const formatTraceLine = (e, i) => {
+                                    const k = (typeof e.k === "number") ? ` k=${e.k}` : "";
+                                    const run = (typeof e.run === "number") ? ` run=${e.run}` : "";
+                                    const tbl = (typeof e.dcTbl === "number") ? ` dcTbl=${e.dcTbl}` : ((typeof e.acTbl === "number") ? ` acTbl=${e.acTbl}` : "");
+                                    const annex = e.annex ? ` annex=${e.annex}` : "";
+                                    const decision = e.decision ? ` dec=${e.decision}` : "";
+                                    return `#${i + 1} ${e.phase}${annex}${decision} comp=${e.comp}${tbl}${k}${run} ctx=(${e.idx},${e.mps}) bit=${e.bit} A=${e.a} C=${e.c}`;
+                                };
+                                const compactTrace = (limit = 6) => arithmeticTrace.slice(0, limit).map(formatTraceLine).join(" | ");
+                                const traceWindow = (centerStep, radius = 3) => {
+                                    if (!arithmeticTrace.length) return "";
+                                    const centerIdx = Math.max(0, Math.min(arithmeticTrace.length - 1, (centerStep | 0) - 1));
+                                    const start = Math.max(0, centerIdx - radius);
+                                    const end = Math.min(arithmeticTrace.length, centerIdx + radius + 1);
+                                    const lines = [];
+                                    for (let i = start; i < end; i++) {
+                                        const prefix = (i === centerIdx) ? ">>" : "  ";
+                                        lines.push(`${prefix}${formatTraceLine(arithmeticTrace[i], i)}`);
+                                    }
+                                    return lines.join(" ; ");
+                                };
+                                reader.pos = sosEnd;
+                                const arithmeticDecoder = new ArithmeticDecoder(reader);
+                                const initStatus = arithmeticDecoder.initialize();
+                                if (initStatus === STAT_MARKER || initStatus === STAT_RST || initStatus === null) {
+                                    throw new Error(`Arithmetic JPEG init failed (status=${initStatus}).`);
+                                }
+                                if (!arithmeticDecoder.initialized) {
+                                    throw new Error("Arithmetic JPEG init failed (decoder not initialized).");
+                                }
+                                const readPackedCtx = (bank, slot, defaultMps = 0) => {
+                                    const packed = bank[slot] | 0;
+                                    const mps = (packed >> 7) & 1;
+                                    const idx = packed & 0x7f;
+                                    return arithmeticDecoder.createContextState(mps || defaultMps, idx);
+                                };
+                                const writePackedCtx = (bank, slot, state) => {
+                                    bank[slot] = (((state.mps & 1) << 7) | (state.idx & 0x7f)) & 0xff;
+                                };
+                                const decodeArithmeticDcDiff = (c) => {
+                                    const compState = arithmeticState.compStateByType[c.type];
+                                    const stats = arithmeticState.dcStatsByTable[c.dcTbl];
+                                    const cond = arithmeticState.dcConditioningByTable[c.dcTbl];
+                                    let stIndex = compState.dcContext | 0;
+
+                                    const s0 = readPackedCtx(stats, stIndex, 0);
+                                    const nz = arithmeticDecoder.decodeBit(s0);
+                                    writePackedCtx(stats, stIndex, s0);
+                                    pushTrace({ phase: "dc_zero", annex: "F.19", decision: "S0", comp: c.type, dcTbl: c.dcTbl, idx: s0.idx, mps: s0.mps, bit: nz, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    if (nz === STAT_MARKER) return ARITH_MARKER;
+                                    if (nz === STAT_RST) return ARITH_RST;
+                                    if (nz === null) return null;
+                                    if (nz === 0) {
+                                        compState.dcContext = 0;
+                                        return 0;
+                                    }
+
+                                    const sSign = readPackedCtx(stats, stIndex + 1, 0);
+                                    const sign = arithmeticDecoder.decodeBit(sSign);
+                                    writePackedCtx(stats, stIndex + 1, sSign);
+                                    pushTrace({ phase: "dc_sign", annex: "F.22", decision: "SS", comp: c.type, dcTbl: c.dcTbl, idx: sSign.idx, mps: sSign.mps, bit: sign, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    if (sign === STAT_MARKER) return ARITH_MARKER;
+                                    if (sign === STAT_RST) return ARITH_RST;
+                                    if (sign === null) return null;
+
+                                    stIndex += 2 + (sign ? 1 : 0);
+                                    const sClass = readPackedCtx(stats, stIndex, 0);
+                                    let m = arithmeticDecoder.decodeBit(sClass);
+                                    writePackedCtx(stats, stIndex, sClass);
+                                    pushTrace({ phase: "dc_mag_class", annex: "F.23", decision: "SP", comp: c.type, dcTbl: c.dcTbl, idx: sClass.idx, mps: sClass.mps, bit: m, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                    if (m === STAT_MARKER) return ARITH_MARKER;
+                                    if (m === STAT_RST) return ARITH_RST;
+                                    if (m === null) return null;
+
+                                    if (m) {
+                                        stIndex = 20;
+                                        while (true) {
+                                            const sGrow = readPackedCtx(stats, stIndex, 0);
+                                            const b = arithmeticDecoder.decodeBit(sGrow);
+                                            writePackedCtx(stats, stIndex, sGrow);
+                                            pushTrace({ phase: "dc_mag_grow", annex: "F.23", decision: "X1", comp: c.type, dcTbl: c.dcTbl, idx: sGrow.idx, mps: sGrow.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (b === STAT_MARKER) return ARITH_MARKER;
+                                            if (b === STAT_RST) return ARITH_RST;
+                                            if (b === null) return null;
+                                            if (!b) break;
+                                            m <<= 1;
+                                            stIndex += 1;
+                                            if (m === 0x8000) {
+                                                if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    const low = Math.max(0, (cond && cond.L) | 0);
+                                    const high = Math.max(low, (cond && cond.U) | 0);
+                                    const lowThr = (1 << low) >> 1;
+                                    const highThr = (1 << high) >> 1;
+                                    if (m < lowThr) compState.dcContext = 0;
+                                    else if (m > highThr) compState.dcContext = 12 + (sign ? 4 : 0);
+                                    else compState.dcContext = 4 + (sign ? 4 : 0);
+
+                                    let v = m;
+                                    stIndex += 14;
+                                    while (m >>= 1) {
+                                        const sBit = readPackedCtx(stats, stIndex, 0);
+                                        const b = arithmeticDecoder.decodeBit(sBit);
+                                        writePackedCtx(stats, stIndex, sBit);
+                                        pushTrace({ phase: "dc_mag_bits", annex: "F.24", decision: "V", comp: c.type, dcTbl: c.dcTbl, idx: sBit.idx, mps: sBit.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (b === STAT_MARKER) return ARITH_MARKER;
+                                        if (b === STAT_RST) return ARITH_RST;
+                                        if (b === null) return null;
+                                        if (b) v |= m;
+                                    }
+
+                                    v += 1;
+                                    if (sign) v = -v;
+                                    compState.lastDcVal = (compState.lastDcVal + v) | 0;
+                                    return v;
+                                };
+
+                                const decodeArithmeticAcBlock = (blockOffset, c, kFrom = 1, kTo = 63) => {
+                                    const stats = arithmeticState.acStatsByTable[c.acTbl];
+                                    const fixed = arithmeticState.fixedBin;
+                                    const acCond = arithmeticState.acConditioningByTable[c.acTbl];
+                                    const kx = acCond && acCond.Kx ? acCond.Kx : 5;
+                                    let k = kFrom;
+                                    while (k <= kTo) {
+                                        let stIndex = 3 * (k - 1);
+                                        const sEob = readPackedCtx(stats, stIndex, 0);
+                                        const eob = arithmeticDecoder.decodeBit(sEob);
+                                        writePackedCtx(stats, stIndex, sEob);
+                                        pushTrace({ phase: "ac_eob", annex: "F.20", decision: "EOB", comp: c.type, acTbl: c.acTbl, k, idx: sEob.idx, mps: sEob.mps, bit: eob, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
+                                        if (eob) break;
+
+                                        while (true) {
+                                            const sSn = readPackedCtx(stats, stIndex + 1, 0);
+                                            const sn = arithmeticDecoder.decodeBit(sSn);
+                                            writePackedCtx(stats, stIndex + 1, sSn);
+                                            pushTrace({ phase: "ac_sig", annex: "F.20", decision: "SN", comp: c.type, acTbl: c.acTbl, k, idx: sSn.idx, mps: sSn.mps, bit: sn, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (sn === STAT_MARKER || sn === STAT_RST || sn === null) return sn;
+                                            if (sn) break;
+                                            stIndex += 3;
+                                            k++;
+                                            if (k > kTo) {
+                                                if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                return 0;
+                                            }
+                                        }
+
+                                        const sSign = readPackedCtx(fixed, 0, 0);
+                                        const sign = arithmeticDecoder.decodeBit(sSign);
+                                        writePackedCtx(fixed, 0, sSign);
+                                        pushTrace({ phase: "ac_sign", annex: "F.22", decision: "S", comp: c.type, acTbl: c.acTbl, k, idx: sSign.idx, mps: sSign.mps, bit: sign, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (sign === STAT_MARKER || sign === STAT_RST || sign === null) return sign;
+
+                                        stIndex += 2;
+                                        const sClass = readPackedCtx(stats, stIndex, 0);
+                                        let m = arithmeticDecoder.decodeBit(sClass);
+                                        writePackedCtx(stats, stIndex, sClass);
+                                        pushTrace({ phase: "ac_mag_class", annex: "F.23", decision: "SP", comp: c.type, acTbl: c.acTbl, k, idx: sClass.idx, mps: sClass.mps, bit: m, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                        if (m === STAT_MARKER || m === STAT_RST || m === null) return m;
+                                        if (m) {
+                                            const sX = readPackedCtx(stats, stIndex, 0);
+                                            const x = arithmeticDecoder.decodeBit(sX);
+                                            writePackedCtx(stats, stIndex, sX);
+                                            pushTrace({ phase: "ac_mag_x", annex: "F.23", decision: "X", comp: c.type, acTbl: c.acTbl, k, idx: sX.idx, mps: sX.mps, bit: x, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (x === STAT_MARKER || x === STAT_RST || x === null) return x;
+                                            if (x) {
+                                                m <<= 1;
+                                                stIndex = (k <= kx) ? 189 : 217;
+                                                while (true) {
+                                                    const sGrow = readPackedCtx(stats, stIndex, 0);
+                                                    const b = arithmeticDecoder.decodeBit(sGrow);
+                                                    writePackedCtx(stats, stIndex, sGrow);
+                                                    pushTrace({ phase: "ac_mag_grow", annex: "F.23", decision: "X1", comp: c.type, acTbl: c.acTbl, k, idx: sGrow.idx, mps: sGrow.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                    if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                                    if (!b) break;
+                                                    m <<= 1;
+                                                    stIndex += 1;
+                                                    if (m === 0x8000) {
+                                                        if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        let v = m;
+                                        stIndex += 14;
+                                        while (m >>= 1) {
+                                            const sBit = readPackedCtx(stats, stIndex, 0);
+                                            const b = arithmeticDecoder.decodeBit(sBit);
+                                            writePackedCtx(stats, stIndex, sBit);
+                                            pushTrace({ phase: "ac_mag_bits", annex: "F.24", decision: "V", comp: c.type, acTbl: c.acTbl, k, idx: sBit.idx, mps: sBit.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                            if (b) v |= m;
+                                        }
+
+                                        v += 1;
+                                        if (sign) v = -v;
+                                        coeff[blockOffset + zig[k]] = v << Al;
+                                        k++;
+                                    }
+                                    return 0;
+                                };
+                                const decodeArithmeticAcRefineBlock = (blockOffset, c, kFrom, kTo, p1, m1) => {
+                                    const stats = arithmeticState.acStatsByTable[c.acTbl];
+                                    const fixed = arithmeticState.fixedBin;
+                                    let kex = kTo;
+                                    while (kex > 0) {
+                                        if ((coeff[blockOffset + zig[kex]] | 0) !== 0) break;
+                                        kex--;
+                                    }
+
+                                    for (let k = kFrom; k <= kTo; k++) {
+                                        let stBase = 3 * (k - 1);
+                                        if (k > kex) {
+                                            const sEob = readPackedCtx(stats, stBase, 0);
+                                            const eob = arithmeticDecoder.decodeBit(sEob);
+                                            writePackedCtx(stats, stBase, sEob);
+                                            pushTrace({ phase: "ac_refine_eob", annex: "F.27", decision: "EOB", comp: c.type, acTbl: c.acTbl, k, idx: sEob.idx, mps: sEob.mps, bit: eob, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
+                                            if (eob) break;
+                                        }
+
+                                        for (;;) {
+                                            const idx = blockOffset + zig[k];
+                                            const cur = coeff[idx] | 0;
+                                            if (cur !== 0) {
+                                                const sRef = readPackedCtx(stats, stBase + 2, 0);
+                                                const b = arithmeticDecoder.decodeBit(sRef);
+                                                writePackedCtx(stats, stBase + 2, sRef);
+                                                pushTrace({ phase: "ac_refine_existing", annex: "F.27", decision: "REF1", comp: c.type, acTbl: c.acTbl, k, idx: sRef.idx, mps: sRef.mps, bit: b, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (b === STAT_MARKER || b === STAT_RST || b === null) return b;
+                                                if (b) coeff[idx] = (cur < 0) ? (cur + m1) : (cur + p1);
+                                                break;
+                                            }
+
+                                            const sNew = readPackedCtx(stats, stBase + 1, 0);
+                                            const newBit = arithmeticDecoder.decodeBit(sNew);
+                                            writePackedCtx(stats, stBase + 1, sNew);
+                                            pushTrace({ phase: "ac_refine_new", annex: "F.27", decision: "NEW", comp: c.type, acTbl: c.acTbl, k, idx: sNew.idx, mps: sNew.mps, bit: newBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                            if (newBit === STAT_MARKER || newBit === STAT_RST || newBit === null) return newBit;
+                                            if (newBit) {
+                                                const sSign = readPackedCtx(fixed, 0, 0);
+                                                const signBit = arithmeticDecoder.decodeBit(sSign);
+                                                writePackedCtx(fixed, 0, sSign);
+                                                pushTrace({ phase: "ac_refine_sign", annex: "F.27", decision: "S", comp: c.type, acTbl: c.acTbl, k, idx: sSign.idx, mps: sSign.mps, bit: signBit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (signBit === STAT_MARKER || signBit === STAT_RST || signBit === null) return signBit;
+                                                coeff[idx] = signBit ? m1 : p1;
+                                                break;
+                                            }
+
+                                            stBase += 3;
+                                            k++;
+                                            if (k > kTo) {
+                                                if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                return 0;
+                                            }
+                                        }
+                                    }
+                                    return 0;
+                                };
+
+                                // Arithmetic milestone: consume DC and an initial AC pass with context state.
+                                let dcBlocksDecoded = 0;
+                                let acBlocksDecoded = 0;
+                                let arithmeticStopStatus = null;
+                                let rstEvents = 0;
+                                let mcusSinceRestart = 0;
+                                const resetDcOnRestart = (isSequential || isDcFirst);
+                                const resetAcOnRestart = (isSequential || isAcFirst || isAcRefine);
+                                const resetArithmeticRestartState = (consumeMarker = false) => {
+                                    if (consumeMarker && arithmeticDecoder && typeof arithmeticDecoder.consumeRestartMarker === "function") {
+                                        arithmeticDecoder.consumeRestartMarker();
+                                    }
+                                    if (arithmeticDecoder && typeof arithmeticDecoder.resetForRestart === "function") {
+                                        arithmeticDecoder.resetForRestart();
+                                    }
+                                    if (resetDcOnRestart) {
+                                        predDC[0] = 0; predDC[1] = 0; predDC[2] = 0;
+                                        for (const compType of Object.keys(arithmeticState.compStateByType)) {
+                                            arithmeticState.compStateByType[compType].lastDcVal = 0;
+                                            arithmeticState.compStateByType[compType].dcContext = 0;
+                                        }
+                                        for (const tbl of Object.keys(arithmeticState.dcStatsByTable)) {
+                                            arithmeticState.dcStatsByTable[tbl].fill(0);
+                                        }
+                                    }
+                                    if (resetAcOnRestart) {
+                                        for (const tbl of Object.keys(arithmeticState.acStatsByTable)) {
+                                            arithmeticState.acStatsByTable[tbl].fill(0);
+                                        }
+                                    }
+                                    if (resetDcOnRestart) {
+                                        for (const compType of Object.keys(arithmeticState.dcMagnitudeContextByType)) {
+                                            arithmeticState.dcMagnitudeContextByType[compType].fill(0);
+                                        }
+                                    }
+                                    if (resetAcOnRestart) {
+                                        for (const compType of Object.keys(arithmeticState.acBandContextByType)) {
+                                            arithmeticState.acBandContextByType[compType].fill(0);
+                                        }
+                                    }
+                                };
+                                const compByType = {};
+                                for (const c of comps) compByType[c.type] = c;
+                                const decodePlan = [];
+                                const isNonInterleavedScan = (ns === 1 && comps.length === 1);
+                                if (isNonInterleavedScan) {
+                                    const c = comps[0];
+                                    let orderedOffsets = compBlockOffsetsCache[c.type];
+                                    if (!orderedOffsets) {
+                                        const blkIndices = [];
+                                        for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
+                                            const def = mcuStructure.blocks[bIdx];
+                                            const compType = (def.t === "C") ? (def.c === 0 ? 1 : 2) : 0;
+                                            if (compType === c.type) blkIndices.push(bIdx);
+                                        }
+                                        if (blkIndices.length === 0) {
+                                            orderedOffsets = new Int32Array(0);
+                                        } else {
+                                            let hComp = 0, vComp = 0;
+                                            const subToBIdx = [];
+                                            for (const bIdx of blkIndices) {
+                                                const def = mcuStructure.blocks[bIdx];
+                                                if (def.dx + 1 > hComp) hComp = def.dx + 1;
+                                                if (def.dy + 1 > vComp) vComp = def.dy + 1;
+                                                subToBIdx[(def.dy * 8) + def.dx] = bIdx;
+                                            }
+
+                                            const compCols = Math.ceil((w * hComp) / (mcuStructure.hMax * 8));
+                                            const compRows = Math.ceil((h * vComp) / (mcuStructure.vMax * 8));
+                                            const ordered = [];
+                                            for (let by = 0; by < compRows; by++) {
+                                                const mcuY = (by / vComp) | 0;
+                                                const subY = by % vComp;
+                                                for (let bx = 0; bx < compCols; bx++) {
+                                                    const mcuX = (bx / hComp) | 0;
+                                                    const subX = bx % hComp;
+                                                    const bIdx = subToBIdx[(subY * 8) + subX];
+                                                    if (bIdx === undefined) continue;
+                                                    const m = mcuY * cols + mcuX;
+                                                    ordered.push((m * blocksPerMCU + bIdx) * 64);
+                                                }
+                                            }
+                                            orderedOffsets = new Int32Array(ordered.length);
+                                            for (let i = 0; i < ordered.length; i++) orderedOffsets[i] = ordered[i];
+                                        }
+                                        compBlockOffsetsCache[c.type] = orderedOffsets;
+                                    }
+                                    for (let i = 0; i < orderedOffsets.length; i++) {
+                                        decodePlan.push({ blockOffset: orderedOffsets[i], c, endOfMCU: true });
+                                    }
+                                } else {
+                                    for (let m = 0; m < cols * rows; m++) {
+                                        let lastInMcu = -1;
+                                        for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
+                                            const blk = blockList[m * blocksPerMCU + bIdx];
+                                            if (!blk) continue;
+                                            const c = compByType[blk.comp];
+                                            if (!c) continue;
+                                            decodePlan.push({ blockOffset: (m * blocksPerMCU + bIdx) * 64, c, endOfMCU: false });
+                                            lastInMcu = decodePlan.length - 1;
+                                        }
+                                        if (lastInMcu >= 0) decodePlan[lastInMcu].endOfMCU = true;
+                                    }
+                                }
+                                outerArithmeticLoop:
+                                for (let step = 0; step < decodePlan.length; step++) {
+                                            const { blockOffset, c, endOfMCU } = decodePlan[step];
+                                            if (blockOffset + 64 > coeff.length) break outerArithmeticLoop;
+
+                                            if (isSequential || isDcFirst) {
+                                                const diff = decodeArithmeticDcDiff(c);
+                                                if (diff === ARITH_RST) {
+                                                    rstEvents++;
+                                                    resetArithmeticRestartState(true);
+                                                    continue;
+                                                }
+                                                if (diff === ARITH_MARKER || diff === STAT_BAD_CODE || diff === null) {
+                                                    arithmeticStopStatus = diff;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                const compState = arithmeticState.compStateByType[c.type];
+                                                coeff[blockOffset] = (compState.lastDcVal | 0) << Al;
+                                                dcBlocksDecoded++;
+                                            } else if (isDcRefine) {
+                                                // DC refinement: fixed 0.5 bin, set bit Al when decoded bit is 1.
+                                                const fixed = arithmeticState.fixedBin;
+                                                const sRef = readPackedCtx(fixed, 0, 0);
+                                                const bit = arithmeticDecoder.decodeBit(sRef);
+                                                writePackedCtx(fixed, 0, sRef);
+                                                pushTrace({ phase: "dc_refine", annex: "F.26", decision: "REF", comp: c.type, dcTbl: c.dcTbl, idx: sRef.idx, mps: sRef.mps, bit, a: arithmeticDecoder.a, c: arithmeticDecoder.c });
+                                                if (bit === STAT_MARKER || bit === STAT_RST || bit === null) {
+                                                    if (bit === STAT_RST) {
+                                                        rstEvents++;
+                                                        resetArithmeticRestartState(true);
+                                                        continue;
+                                                    }
+                                                    arithmeticStopStatus = bit;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                if (bit === 1) coeff[blockOffset] |= (1 << Al);
+                                                dcBlocksDecoded++;
+                                            }
+
+                                            if (isSequential || isAcFirst) {
+                                                const acStart = isSequential ? 1 : Ss;
+                                                const acEnd = isSequential ? 63 : Se;
+                                                const acStatus = decodeArithmeticAcBlock(blockOffset, c, acStart, acEnd);
+                                                if (acStatus === STAT_RST) {
+                                                    rstEvents++;
+                                                    resetArithmeticRestartState(true);
+                                                    continue;
+                                                }
+                                                if (acStatus === STAT_MARKER || acStatus === STAT_BAD_CODE || acStatus === null) {
+                                                    arithmeticStopStatus = acStatus;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                acBlocksDecoded++;
+                                            } else if (isAcRefine) {
+                                                const acRefineStatus = decodeArithmeticAcRefineBlock(blockOffset, c, Ss, Se, p1, m1);
+                                                if (acRefineStatus === STAT_RST) {
+                                                    rstEvents++;
+                                                    resetArithmeticRestartState(true);
+                                                    continue;
+                                                }
+                                                if (acRefineStatus === STAT_MARKER || acRefineStatus === STAT_BAD_CODE || acRefineStatus === null) {
+                                                    arithmeticStopStatus = acRefineStatus;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                acBlocksDecoded++;
+                                            }
+                                    if (endOfMCU && restartIntervalMCUs > 0) {
+                                        mcusSinceRestart++;
+                                        if (mcusSinceRestart >= restartIntervalMCUs) {
+                                            resetArithmeticRestartState(true);
+                                            mcusSinceRestart = 0;
+                                        }
+                                    }
+                                }
+
+                                if (arithmeticStopStatus === STAT_BAD_CODE) {
+                                    throw new Error(`Arithmetic JPEG staged decode aborted on bad arithmetic code (dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
+                                }
+                                if (arithmeticStopStatus !== null && arithmeticStopStatus !== STAT_MARKER) {
+                                    throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
+                                }
+                                if (JpegCORE.Config.strictArithmeticDecode) {
+                                    const last = arithmeticTrace.length ? arithmeticTrace[arithmeticTrace.length - 1] : null;
+                                    const traceLimit = Math.max(1, (JpegCORE.Config.arithmeticTraceLimit | 0) || 128);
+                                    const traceLimitHit = arithmeticTrace.length >= traceLimit;
+                                    const where = last
+                                        ? ` step=${arithmeticTrace.length} phase=${last.phase} comp=${last.comp}${(typeof last.k === "number") ? ` k=${last.k}` : ""}${(typeof last.run === "number") ? ` run=${last.run}` : ""}`
+                                        : ` step=0`;
+                                    const preview = arithmeticTrace.length ? ` trace=[${compactTrace(6)}]` : "";
+                                    const focus = arithmeticTrace.length ? ` focus=[${traceWindow(arithmeticTrace.length, 4)}]` : "";
+                                    throw new Error(`Arithmetic JPEG strict mode: staged model not yet T.81 parity complete (${where}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}, traceLimit=${traceLimit}, traceLimitHit=${traceLimitHit}).${preview}${focus}`);
+                                }
+                                // Arithmetic staged path completed for this scan.
+                                // Keep marker parser aligned for potential following segments/scans.
+                                pos = reader.pos;
+                                const unread = (arithmeticDecoder && typeof arithmeticDecoder.getUnreadMarkerInfo === "function")
+                                    ? arithmeticDecoder.getUnreadMarkerInfo()
+                                    : null;
+                                if (unread && typeof unread.ffPos === "number" && unread.ffPos >= 0) {
+                                    pos = unread.ffPos;
+                                }
+                                if (pos > 0 && pos < d.length && d[pos] !== 0xFF && d[pos - 1] === 0xFF) {
+                                    pos--;
+                                }
+                                continue;
+                            }
 
                             // WICHTIG: BitReader auf den Start der Bilddaten setzen
                             reader.pos= sosEnd;
@@ -1117,14 +2060,34 @@ const JpegCORE = {
                                 tables[tc][th] = makeTree(nr, val);
                             }
                             pos = end;
+                        } else if (marker === M.DAC) {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            if (pos + 1 + len > d.length) break;
+                            parseDacSegment(pos + 3, pos + 1 + len);
+                            pos += 1 + len;
+                        } else if (marker === M.DRI) {
+                            const len = (d[pos + 1] << 8) | d[pos + 2];
+                            if (pos + 1 + len > d.length) break;
+                            if (len >= 4 && pos + 4 < d.length) {
+                                restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
+                            }
+                            pos += 1 + len;
                         } else if (marker === M.EOI) { break; }
                         else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
                     }
-                } catch (e) { console.warn("Robust Decode Warning:", e); }
+                } catch (e) {
+                    if (e && typeof e.message === "string" && e.message.includes("Arithmetic JPEG")) {
+                        throw e;
+                    }
+                    console.warn("Robust Decode Warning:", e);
+                }
 
-                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, decodeBackend: 'internal' };
+                return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, restartIntervalMCUs, decodeBackend: 'internal' };
 
             } catch (globalErr) {
+                if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic JPEG")) {
+                    throw globalErr;
+                }
                 console.error("Critical Decoder Failure:", globalErr);
                 return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
             }
@@ -2139,6 +3102,9 @@ const JpegCORE = {
             }
 
             const decoded = await JpegCORE.Decoder.extractBlocksStruct(blob);
+            if (!decoded.preDecodedData && (!decoded.w || !decoded.h || (!decoded.coeffBuffer && !decoded.blockList && !decoded.blocks))) {
+                throw new Error("JpegJsCompat.decode: unsupported or invalid JPEG");
+            }
             const imgData = JpegCORE.Decoder.render(decoded, 1.0);
 
             let data = imgData.data;
@@ -2205,6 +3171,7 @@ const JpegCORE = {
             };
         }
     }
+
 };
 
 
