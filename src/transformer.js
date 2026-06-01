@@ -63,7 +63,7 @@
                         transformOp = 1;
                     } else if (mode === 'ROT_90') {
                         srcC = r;
-                        srcR = cols - 1 - c;
+                        srcR = rows - 1 - c;
                         transformOp = 2;
                     }
 

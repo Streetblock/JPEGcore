@@ -59,6 +59,34 @@ assert.equal(typeof JpegCORE.Analysis.probe, "function", "Analysis.probe missing
 assert.equal(typeof JpegCORE.Transformer.rotate90, "function", "Transformer.rotate90 missing");
 assert.equal(typeof JpegCORE.Glitch.swapChannels, "function", "Glitch.swapChannels missing");
 
+function makeCapturedGrid(mode, cols, rows) {
+  const sm = JpegCORE.Constants.SAMPLE_MODES[mode];
+  const blocks = [];
+  for (let i = 0; i < cols * rows * sm.blocks.length; i++) {
+    const def = sm.blocks[i % sm.blocks.length];
+    blocks.push({
+      data: new Int32Array(64),
+      type: def.t,
+      comp: def.t === "C" ? (def.c === 0 ? 1 : 2) : 0
+    });
+  }
+  return {
+    blocks,
+    w: cols * sm.hMax * 8,
+    h: rows * sm.vMax * 8,
+    mode
+  };
+}
+
+const nonSquareCaptured = makeCapturedGrid("420", 2, 3);
+JpegCORE.Transformer.rotate90(nonSquareCaptured);
+assert.equal(nonSquareCaptured.w, 48, "rotate90 should swap width for non-square MCU grids");
+assert.equal(nonSquareCaptured.h, 32, "rotate90 should swap height for non-square MCU grids");
+assert.equal(nonSquareCaptured.blocks.length, 36, "rotate90 should preserve all MCU blocks");
+for (const block of nonSquareCaptured.blocks) {
+  assert.ok(block && block.data instanceof Int32Array, "rotate90 should not leave empty block slots");
+}
+
 const flatGrayBlock = {
   coeffBuffer: new Int32Array(64),
   blockList: [{ type: "Y", comp: 0 }],
