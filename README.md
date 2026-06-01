@@ -1,16 +1,24 @@
 # JPEGcore
 
-Pure JavaScript JPEG encoder/decoder/transform library.
+Pure JavaScript JPEG encoder, decoder, and transform library for browser and Node.js.
 
 Repository: [Streetblock/JPEGcore](https://github.com/Streetblock/JPEGcore.git)
 
-## Highlights
+## Format Support
 
-- Baseline JPEG decode/encode in plain JavaScript
-- Progressive JPEG decode path improved and validated
-- Utilities for analysis and image transforms
-- Works in browser and Node.js
-- `jpeg-js` compatible decoder wrapper: `JpegCORE.JpegJsCompat.decode(...)`
+| Feature | Status |
+| --- | --- |
+| Baseline JPEG decode | Supported |
+| Baseline JPEG encode | Supported |
+| Progressive JPEG decode (Huffman) | Supported |
+| Arithmetic JPEG decode `SOF9` (sequential) | Supported |
+| Arithmetic JPEG decode `SOF10` (progressive) | Supported |
+| `jpeg-js` compatible decode API | Supported (`JpegCORE.JpegJsCompat.decode`) |
+
+Notes:
+
+- `jpeg-js` does not support arithmetic JPEG (`SOF9`/`SOF10`), but JpegCORE does.
+- In benchmark UI flows, arithmetic files are marked as reference-unsupported for `jpeg-js`.
 
 ## Install
 
@@ -18,17 +26,15 @@ Repository: [Streetblock/JPEGcore](https://github.com/Streetblock/JPEGcore.git)
 npm install jpegcore
 ```
 
-## Usage (Node)
+## Usage (Node.js)
 
 ```js
 const JpegCORE = require("jpegcore");
 ```
 
-## jpeg-js Decoder Compatibility
+`jpeg-js` compatible wrapper:
 
 ```js
-const JpegCORE = require("jpegcore");
-
 const decoded = await JpegCORE.JpegJsCompat.decode(inputBuffer, {
   useTArray: true,
   formatAsRGBA: true
@@ -37,50 +43,75 @@ const decoded = await JpegCORE.JpegJsCompat.decode(inputBuffer, {
 console.log(decoded.width, decoded.height, decoded.data.length);
 ```
 
-`decode(...)` returns the same shape as `jpeg-js`: `{ data, width, height }`.
-
-## Performance Note
-
-In a local benchmark with 8 images, 30 rounds and 3 warmups,  
-`JpegCORE.JpegJsCompat.decode` reached about `7.839 MPix/s` vs `6.163 MPix/s` for `jpeg-js.decode`  
-(about `27.18%` faster in that setup).
+`decode(...)` returns the `jpeg-js` shape: `{ data, width, height }`.
 
 ## Usage (Browser)
 
 ```html
 <script src="./JPEGcore.js"></script>
 <script>
-  // window.JpegCORE is available
+  // window.JpegCORE
 </script>
 ```
 
-## Development
+## Build and Test
 
-Build the bundled library from the modular source fragments:
+Build default bundle (with arithmetic decode support):
 
 ```bash
 npm run build
 ```
 
-Run smoke test:
+Build bundle without arithmetic decode:
+
+```bash
+npm run build:noarith
+```
+
+Run test suite:
 
 ```bash
 npm test
 ```
 
-Run local compare test (against jpeg-js reference in `../Referenz`):
+Arithmetic golden compare (against libjpeg-turbo reference output):
+
+```bash
+npm run arith:golden -- --fixture tests/fixtures/jpeg/libjpeg-turbo-testimgari.jpg --golden tests/fixtures/jpeg/libjpeg-turbo-testimgari.ref.ppm
+```
+
+Generate `SOF10` arithmetic fixture:
+
+```bash
+npm run fixture:sof10
+```
+
+## Benchmarks and Workbench
+
+- `benchmarks/`: benchmark and visual compare UIs.
+- `dev/`: local debug and compare tooling.
+
+Local compare helper:
 
 ```bash
 node dev/dev-compare.js
 ```
 
+## Fixtures and Licensing
+
+Committed JPEG fixtures (including arithmetic and EXIF-oriented samples) are documented in:
+
+- [tests/fixtures/jpeg/README.md](tests/fixtures/jpeg/README.md)
+
+That file includes fixture sources, licenses, purpose, and SHA-256 checksums.
+
 ## Project Structure
 
-- `JPEGcore.js`: main library
-- `src/`: modular source fragments used to build `JPEGcore.js`
-- `scripts/`: build tooling
-- `benchmarks/`: benchmark HTML and helpers
-- `tests/`: automated smoke test
-- `dev/`: local debug/compare tooling (for development)
+- `JPEGcore.js`: bundled library entry point
+- `src/`: modular source fragments used by the build
+- `scripts/`: build and fixture tooling
+- `benchmarks/`: benchmark/workbench HTML
+- `tests/`: automated tests and fixtures
+- `dev/`: developer compare/debug helpers
 
 Copyright (c) David Block
