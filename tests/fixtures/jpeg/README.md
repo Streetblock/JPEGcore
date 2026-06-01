@@ -9,3 +9,12 @@ This branch currently carries one arithmetic-coded fixture used to drive arithme
 Source URL:
 
 - https://github.com/libjpeg-turbo/libjpeg-turbo/tree/main/testimages
+
+## Golden comparison workflow
+
+1. Generate a libjpeg-turbo reference decode (PPM, RGB):
+   - `djpeg -ppm libjpeg-turbo-testimgari.jpg > libjpeg-turbo-testimgari.ref.ppm`
+2. Run JpegCORE comparison:
+   - `npm run arith:golden -- --fixture tests/fixtures/jpeg/libjpeg-turbo-testimgari.jpg --golden tests/fixtures/jpeg/libjpeg-turbo-testimgari.ref.ppm`
+3. Optional export of current JpegCORE output:
+   - `npm run arith:golden -- --fixture tests/fixtures/jpeg/libjpeg-turbo-testimgari.jpg --export-core-ppm artifacts/libjpeg-turbo-testimgari.core.ppm`

@@ -27,6 +27,7 @@
     "build": "node scripts/build-core.js",
     "pretest": "npm run build",
     "test": "node tests/smoke.test.js && node tests/arithmetic-fixture.test.js",
+    "arith:golden": "node scripts/arithmetic-golden-compare.js",
     "trace:export": "node scripts/arith-trace-export.js",
     "trace:diff": "node scripts/arith-trace-diff.js"
   }
