@@ -57,7 +57,7 @@
                 const len = (d[pos + 1] << 8) | d[pos + 2];
                 const segmentEnd = pos + 1 + len;
 
-                if (marker === M.SOF0 || marker === M.SOF2) {
+                if (marker === M.SOF0 || marker === M.SOF2 || marker === M.SOF9 || marker === M.SOF10) {
                     h = (d[pos + 4] << 8) | d[pos + 5];
                     w = (d[pos + 6] << 8) | d[pos + 7];
                     const numComps = d[pos + 8];
@@ -122,9 +122,9 @@
                         if (type >= M.SOF0 && type <= M.COM) {
                             const len = (d[pos + 2] << 8) | d[pos + 3];
                             const fullSegment = d.slice(pos, pos + 2 + len);
-                            if (type === M.SOF0 || type === M.SOF2 || type === M.SOF9) {
-                                detectedProgressive = (type === M.SOF2);
-                                detectedArithmetic = (type === M.SOF9);
+                            if (type === M.SOF0 || type === M.SOF2 || type === M.SOF9 || type === M.SOF10) {
+                                detectedProgressive = (type === M.SOF2 || type === M.SOF10);
+                                detectedArithmetic = (type === M.SOF9 || type === M.SOF10);
                                 detectedHeight = ((d[pos + 5] << 8) | d[pos + 6]) >>> 0;
                                 detectedWidth = ((d[pos + 7] << 8) | d[pos + 8]) >>> 0;
                                 const ySamp = d[pos + 11];

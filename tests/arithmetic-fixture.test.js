@@ -42,6 +42,22 @@ async function main() {
     assert.ok(table.Kx >= 1 && table.Kx <= 63, "AC conditioning Kx out of range");
   }
 
+  // SOF10 probe detection smoke check:
+  // mutate SOF9 marker byte (FFC9) to SOF10 (FFCA) and ensure analysis flags arithmetic+progressive.
+  const sof10Bytes = Buffer.from(bytes);
+  let sof9Pos = -1;
+  for (let i = 0; i < sof10Bytes.length - 1; i++) {
+    if (sof10Bytes[i] === 0xff && sof10Bytes[i + 1] === 0xc9) {
+      sof9Pos = i + 1;
+      break;
+    }
+  }
+  assert.ok(sof9Pos > 0, "fixture should include FFC9 marker");
+  sof10Bytes[sof9Pos] = 0xca;
+  const sof10Probe = await JpegCORE.Analysis.probe(new TestBlob([sof10Bytes]));
+  assert.equal(sof10Probe.detectedArithmetic, true, "SOF10 should be treated as arithmetic");
+  assert.equal(sof10Probe.detectedProgressive, true, "SOF10 should be treated as progressive");
+
   JpegCORE.Config.strictArithmeticDecode = false;
   const decoded = await JpegCORE.JpegJsCompat.decode(bytes);
   assert.ok(decoded.width > 0, "decoded width should be > 0");

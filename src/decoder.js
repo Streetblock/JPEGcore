@@ -360,9 +360,9 @@
                     const segmentEnd = pos + 1 + len;
                     if (segmentEnd > d.length) break;
 
-                    if (marker === M.SOF0 || marker === M.SOF2 || marker === M.SOF9) {
-                        isProgressive = (marker === M.SOF2);
-                        isArithmetic = (marker === M.SOF9);
+                    if (marker === M.SOF0 || marker === M.SOF2 || marker === M.SOF9 || marker === M.SOF10) {
+                        isProgressive = (marker === M.SOF2 || marker === M.SOF10);
+                        isArithmetic = (marker === M.SOF9 || marker === M.SOF10);
                         h = (d[pos + 4] << 8) | d[pos + 5];
                         w = (d[pos + 6] << 8) | d[pos + 7];
                         const numComps = d[pos + 8];

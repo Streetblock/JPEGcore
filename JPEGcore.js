@@ -24,7 +24,7 @@ const JpegCORE = {
     // --- 1. CONSTANTS ---
     Constants: {
       MARKERS: {
-          SOI: 0xD8, EOI: 0xD9, SOF0: 0xC0, SOF2: 0xC2, SOF9: 0xC9, DHT: 0xC4,
+          SOI: 0xD8, EOI: 0xD9, SOF0: 0xC0, SOF2: 0xC2, SOF9: 0xC9, SOF10: 0xCA, DHT: 0xC4,
           DAC: 0xCC,
           DQT: 0xDB, DRI: 0xDD, SOS: 0xDA, APP0: 0xE0, APP1: 0xE1, COM: 0xFE, RST0: 0xD0, RST7: 0xD7
       },
@@ -591,7 +591,7 @@ const JpegCORE = {
                 const len = (d[pos + 1] << 8) | d[pos + 2];
                 const segmentEnd = pos + 1 + len;
 
-                if (marker === M.SOF0 || marker === M.SOF2) {
+                if (marker === M.SOF0 || marker === M.SOF2 || marker === M.SOF9 || marker === M.SOF10) {
                     h = (d[pos + 4] << 8) | d[pos + 5];
                     w = (d[pos + 6] << 8) | d[pos + 7];
                     const numComps = d[pos + 8];
@@ -656,9 +656,9 @@ const JpegCORE = {
                         if (type >= M.SOF0 && type <= M.COM) {
                             const len = (d[pos + 2] << 8) | d[pos + 3];
                             const fullSegment = d.slice(pos, pos + 2 + len);
-                            if (type === M.SOF0 || type === M.SOF2 || type === M.SOF9) {
-                                detectedProgressive = (type === M.SOF2);
-                                detectedArithmetic = (type === M.SOF9);
+                            if (type === M.SOF0 || type === M.SOF2 || type === M.SOF9 || type === M.SOF10) {
+                                detectedProgressive = (type === M.SOF2 || type === M.SOF10);
+                                detectedArithmetic = (type === M.SOF9 || type === M.SOF10);
                                 detectedHeight = ((d[pos + 5] << 8) | d[pos + 6]) >>> 0;
                                 detectedWidth = ((d[pos + 7] << 8) | d[pos + 8]) >>> 0;
                                 const ySamp = d[pos + 11];
@@ -1135,9 +1135,9 @@ const JpegCORE = {
                     const segmentEnd = pos + 1 + len;
                     if (segmentEnd > d.length) break;
 
-                    if (marker === M.SOF0 || marker === M.SOF2 || marker === M.SOF9) {
-                        isProgressive = (marker === M.SOF2);
-                        isArithmetic = (marker === M.SOF9);
+                    if (marker === M.SOF0 || marker === M.SOF2 || marker === M.SOF9 || marker === M.SOF10) {
+                        isProgressive = (marker === M.SOF2 || marker === M.SOF10);
+                        isArithmetic = (marker === M.SOF9 || marker === M.SOF10);
                         h = (d[pos + 4] << 8) | d[pos + 5];
                         w = (d[pos + 6] << 8) | d[pos + 7];
                         const numComps = d[pos + 8];
