@@ -233,7 +233,9 @@
             const msg = String(err.message || err).toLowerCase();
             return msg.includes("unknown jpeg marker ffc9")
                 || msg.includes("unknown jpeg marker 0xffc9")
-                || (msg.includes("unknown jpeg marker") && msg.includes("ffc9"));
+                || msg.includes("unknown jpeg marker ffca")
+                || msg.includes("unknown jpeg marker 0xffca")
+                || (msg.includes("unknown jpeg marker") && (msg.includes("ffc9") || msg.includes("ffca")));
         };
 
         fileInput.addEventListener('change', async (e) => {
@@ -273,12 +275,12 @@
                     const t1 = performance.now();
                     const dtCore = t1 - t0;
 
-                    // 2. jpeg-js Run (SOF9 arithmetic is not supported by jpeg-js)
+                    // 2. jpeg-js Run (arithmetic SOF9/SOF10 are not supported by jpeg-js)
                     let imgDataJs = null;
                     let dtJs = 0;
                     let refUnsupported = false;
                     const bytes = new Uint8Array(arrayBuffer);
-                    if (hasMarker(bytes, 0xC9)) {
+                    if (hasMarker(bytes, 0xC9) || hasMarker(bytes, 0xCA)) {
                         refUnsupported = true;
                         imgDataJs = imgDataCore;
                     } else {
@@ -325,7 +327,7 @@
                             <div>CORE: <span class="text-slate-200">${dtCore.toFixed(1)}ms</span></div>
                             <div>JS: <span class="text-slate-200">${refUnsupported ? 'n/a' : dtJs.toFixed(1) + 'ms'}</span></div>
                         </div>
-                        <div class="text-[9px] mt-1 text-right ${diffColor}">${refUnsupported ? 'RMSE: n/a (jpeg-js no SOF9)' : 'RMSE: ' + rmse.toFixed(2)}</div>
+                        <div class="text-[9px] mt-1 text-right ${diffColor}">${refUnsupported ? 'RMSE: n/a (jpeg-js no arithmetic SOF9/SOF10)' : 'RMSE: ' + rmse.toFixed(2)}</div>
                     `;
 
                     // Interaction
