@@ -183,6 +183,7 @@
                 // STATUS CODES
                 const STAT_MARKER = -1;
                 const STAT_RST = -2;
+                const STAT_BAD_CODE = -2147483648;
                 const arithmeticTables = { dc: {}, ac: {} };
 
                 // --- Robust Bit Reader Instanz ---
@@ -541,6 +542,7 @@
                                 const acCompContexts = Object.keys(arithmeticState.acBandContextByType).length;
                                 const traceLimit = (JpegCORE.Config.arithmeticTraceLimit | 0) > 0 ? (JpegCORE.Config.arithmeticTraceLimit | 0) : 0;
                                 const arithmeticTrace = [];
+                                const arithmeticFailFast = !!JpegCORE.Config.strictArithmeticFailFast;
                                 const pushTrace = (entry) => {
                                     if (traceLimit <= 0) return;
                                     if (arithmeticTrace.length >= traceLimit) return;
@@ -625,7 +627,10 @@
                                             if (!b) break;
                                             m <<= 1;
                                             stIndex += 1;
-                                            if (m === 0x8000) break;
+                                            if (m === 0x8000) {
+                                                if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                break;
+                                            }
                                         }
                                     }
 
@@ -669,7 +674,6 @@
                                         if (eob === STAT_MARKER || eob === STAT_RST || eob === null) return eob;
                                         if (eob) break;
 
-                                        let reachedSpectralEnd = false;
                                         while (true) {
                                             const sSn = readPackedCtx(stats, stIndex + 1, 0);
                                             const sn = arithmeticDecoder.decodeBit(sSn);
@@ -679,9 +683,11 @@
                                             if (sn) break;
                                             stIndex += 3;
                                             k++;
-                                            if (k > kTo) { reachedSpectralEnd = true; break; }
+                                            if (k > kTo) {
+                                                if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                return 0;
+                                            }
                                         }
-                                        if (reachedSpectralEnd) break;
 
                                         const sSign = readPackedCtx(fixed, 0, 0);
                                         const sign = arithmeticDecoder.decodeBit(sSign);
@@ -713,7 +719,10 @@
                                                     if (!b) break;
                                                     m <<= 1;
                                                     stIndex += 1;
-                                                    if (m === 0x8000) break;
+                                                    if (m === 0x8000) {
+                                                        if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                        break;
+                                                    }
                                                 }
                                             }
                                         }
@@ -786,7 +795,10 @@
 
                                             stBase += 3;
                                             k++;
-                                            if (k > kTo) return 0;
+                                            if (k > kTo) {
+                                                if (arithmeticFailFast) return STAT_BAD_CODE;
+                                                return 0;
+                                            }
                                         }
                                     }
                                     return 0;
@@ -854,7 +866,7 @@
                                                     resetArithmeticRestartState(true);
                                                     continue;
                                                 }
-                                                if (diff === STAT_MARKER || diff === null) {
+                                                if (diff === STAT_MARKER || diff === STAT_BAD_CODE || diff === null) {
                                                     arithmeticStopStatus = diff;
                                                     break outerArithmeticLoop;
                                                 }
@@ -890,7 +902,7 @@
                                                     resetArithmeticRestartState(true);
                                                     continue;
                                                 }
-                                                if (acStatus === STAT_MARKER || acStatus === null) {
+                                                if (acStatus === STAT_MARKER || acStatus === STAT_BAD_CODE || acStatus === null) {
                                                     arithmeticStopStatus = acStatus;
                                                     break outerArithmeticLoop;
                                                 }
@@ -902,7 +914,7 @@
                                                     resetArithmeticRestartState(true);
                                                     continue;
                                                 }
-                                                if (acRefineStatus === STAT_MARKER || acRefineStatus === null) {
+                                                if (acRefineStatus === STAT_MARKER || acRefineStatus === STAT_BAD_CODE || acRefineStatus === null) {
                                                     arithmeticStopStatus = acRefineStatus;
                                                     break outerArithmeticLoop;
                                                 }
@@ -919,6 +931,9 @@
                                     }
                                 }
 
+                                if (arithmeticStopStatus === STAT_BAD_CODE) {
+                                    throw new Error(`Arithmetic JPEG staged decode aborted on bad arithmetic code (dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
+                                }
                                 if (arithmeticStopStatus !== null && arithmeticStopStatus !== STAT_MARKER) {
                                     throw new Error(`Arithmetic JPEG staged decode interrupted (status=${arithmeticStopStatus}, dcBlocksDecoded=${dcBlocksDecoded}, acBlocksDecoded=${acBlocksDecoded}, rstEvents=${rstEvents}).`);
                                 }
