@@ -530,14 +530,8 @@
                                 const p1 = 1 << Al;
                                 const m1 = (-1) << Al;
 
-                                for (const c of comps) {
-                                    if (!arithmeticTables.dc[c.dcTbl]) {
-                                        throw new Error(`Arithmetic JPEG missing DC conditioning table ${c.dcTbl} for component type ${c.type}.`);
-                                    }
-                                    if (!arithmeticTables.ac[c.acTbl]) {
-                                        throw new Error(`Arithmetic JPEG missing AC conditioning table ${c.acTbl} for component type ${c.type}.`);
-                                    }
-                                }
+                                // DAC tables are optional in practice; when absent, libjpeg-compatible defaults
+                                // are applied by buildArithmeticScanState (DC L/U -> 0/1, AC Kx -> 5).
                                 const arithmeticState = buildArithmeticScanState(comps);
                                 const dcStateTables = Object.keys(arithmeticState.dcStatsByTable).length;
                                 const acStateTables = Object.keys(arithmeticState.acStatsByTable).length;

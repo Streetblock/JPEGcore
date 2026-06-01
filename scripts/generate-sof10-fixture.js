@@ -63,7 +63,7 @@ function main() {
   const cjpeg = resolveCjpeg();
   const result = spawnSync(
     cjpeg,
-    ["-ppm", "-quality", "75", "-progressive", "-arithmetic", "-outfile", output, input],
+    ["-quality", "75", "-progressive", "-arithmetic", "-outfile", output, input],
     { encoding: "utf8" }
   );
 

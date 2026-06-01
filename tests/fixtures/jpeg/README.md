@@ -5,6 +5,7 @@ This branch currently carries one arithmetic-coded fixture used to drive arithme
 | File | Source | License | Purpose | SHA-256 |
 | --- | --- | --- | --- | --- |
 | `libjpeg-turbo-testimgari.jpg` | `libjpeg-turbo/libjpeg-turbo` `testimages/testimgari.jpg` | libjpeg-turbo license, BSD-style | Arithmetic-coded JPEG (`SOF9` + `DAC`) fixture for decoder implementation work | `4672c7f08864cd0a8c73a4fa4b66ca32b635d38464551c1ecf06564ae8c89b38` |
+| `testorig-sof10-arith.jpg` | generated locally with `cjpeg -progressive -arithmetic` from `testimages/testorig.ppm` | libjpeg-turbo license, BSD-style | Progressive arithmetic JPEG (`SOF10`) fixture for end-to-end decoder validation | `c1cefce3534d555835b186aa0ea7211af549d9d3f6f216bd84fc251179055471` |
 
 Source URL:
 
