@@ -10,6 +10,19 @@ Source URL:
 
 - https://github.com/libjpeg-turbo/libjpeg-turbo/tree/main/testimages
 
+## SOF10 fixture generation
+
+Generate a real progressive arithmetic fixture (`SOF10`) with libjpeg-turbo `cjpeg`:
+
+- `npm run fixture:sof10`
+
+Optional overrides:
+
+- `CJPEG_PATH=/path/to/cjpeg npm run fixture:sof10`
+- `npm run fixture:sof10 -- --input dev/libjpeg-turbo-src/testimages/testorig.ppm --output tests/fixtures/jpeg/testorig-sof10-arith.jpg`
+
+The generator validates that output contains `SOF10 (FFCA)` and `DAC (FFCC)` and prints SHA-256.
+
 ## Golden comparison workflow
 
 1. Generate a libjpeg-turbo reference decode (PPM, RGB):

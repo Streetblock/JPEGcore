@@ -85,6 +85,21 @@ async function main() {
   }
   assert.equal(sof10NonZeroSeen, true, "SOF10 decoded RGB should not be all zero");
 
+  // Real SOF10 fixture (optional): generated via `npm run fixture:sof10`.
+  const realSof10Path = path.join(fixturesDir, "testorig-sof10-arith.jpg");
+  if (fs.existsSync(realSof10Path)) {
+    const realSof10Bytes = fs.readFileSync(realSof10Path);
+    const realMarkers = collectMarkers(realSof10Bytes);
+    assert.ok(realMarkers.has(0xca), "real SOF10 fixture should contain SOF10 marker");
+    assert.ok(realMarkers.has(0xcc), "real SOF10 fixture should contain DAC marker");
+    const realProbe = await JpegCORE.Analysis.probe(new TestBlob([realSof10Bytes]));
+    assert.equal(realProbe.detectedArithmetic, true, "real SOF10 probe should be arithmetic");
+    assert.equal(realProbe.detectedProgressive, true, "real SOF10 probe should be progressive");
+    const realDecoded = await JpegCORE.JpegJsCompat.decode(realSof10Bytes);
+    assert.ok(realDecoded.width > 0 && realDecoded.height > 0, "real SOF10 decode dimensions should be > 0");
+    assert.equal(realDecoded.data.length, realDecoded.width * realDecoded.height * 4, "real SOF10 RGBA length mismatch");
+  }
+
   const strictCore = loadCore(repoRoot).JpegCORE;
   strictCore.Config.strictArithmeticDecode = true;
   await assert.rejects(async () => {
