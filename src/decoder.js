@@ -515,9 +515,16 @@
                             if (isArithmetic) {
                                 const dcCount = Object.keys(arithmeticTables.dc).length;
                                 const acCount = Object.keys(arithmeticTables.ac).length;
-                                const isSequential = (Ss === 0 && Se === 63 && Ah === 0 && Al === 0);
-                                if (!isSequential) {
+                                const isSequential = (Ss === 0 && Se === 63 && Ah === 0);
+                                const isDcFirst = (Ss === 0 && Se === 0 && Ah === 0);
+                                const isAcFirst = (Ss > 0 && Se <= 63 && Ah === 0);
+                                const isDcRefine = (Ss === 0 && Se === 0 && Ah > 0);
+                                const isAcRefine = (Ss > 0 && Se <= 63 && Ah > 0);
+                                if (!(isSequential || isDcFirst || isAcFirst || isDcRefine || isAcRefine)) {
                                     throw new Error(`Arithmetic JPEG scan mode not supported yet (Ss=${Ss}, Se=${Se}, Ah=${Ah}, Al=${Al}; DAC DC=${dcCount}, AC=${acCount}).`);
+                                }
+                                if (isDcRefine || isAcRefine) {
+                                    throw new Error(`Arithmetic JPEG refine scan not implemented yet (Ss=${Ss}, Se=${Se}, Ah=${Ah}, Al=${Al}).`);
                                 }
 
                                 for (const c of comps) {
@@ -648,13 +655,13 @@
                                     return v;
                                 };
 
-                                const decodeArithmeticAcBlock = (blockOffset, c) => {
+                                const decodeArithmeticAcBlock = (blockOffset, c, kFrom = 1, kTo = 63) => {
                                     const stats = arithmeticState.acStatsByTable[c.acTbl];
                                     const fixed = arithmeticState.fixedBin;
                                     const acCond = arithmeticState.acConditioningByTable[c.acTbl];
                                     const kx = acCond && acCond.Kx ? acCond.Kx : 5;
-                                    let k = 1;
-                                    while (k < 64) {
+                                    let k = kFrom;
+                                    while (k <= kTo) {
                                         let stIndex = 3 * (k - 1);
                                         const sEob = readPackedCtx(stats, stIndex, 0);
                                         const eob = arithmeticDecoder.decodeBit(sEob);
@@ -673,7 +680,7 @@
                                             if (sn) break;
                                             stIndex += 3;
                                             k++;
-                                            if (k >= 64) { reachedSpectralEnd = true; break; }
+                                            if (k > kTo) { reachedSpectralEnd = true; break; }
                                         }
                                         if (reachedSpectralEnd) break;
 
@@ -773,31 +780,37 @@
                                             const blockOffset = (m * blocksPerMCU + bIdx) * 64;
                                             if (blockOffset + 64 > coeff.length) break outerArithmeticLoop;
 
-                                            const diff = decodeArithmeticDcDiff(c);
-                                            if (diff === STAT_RST) {
-                                                rstEvents++;
-                                                resetArithmeticRestartState(true);
-                                                continue;
+                                            if (isSequential || isDcFirst) {
+                                                const diff = decodeArithmeticDcDiff(c);
+                                                if (diff === STAT_RST) {
+                                                    rstEvents++;
+                                                    resetArithmeticRestartState(true);
+                                                    continue;
+                                                }
+                                                if (diff === STAT_MARKER || diff === null) {
+                                                    arithmeticStopStatus = diff;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                const compState = arithmeticState.compStateByType[c.type];
+                                                coeff[blockOffset] = (compState.lastDcVal | 0) << Al;
+                                                dcBlocksDecoded++;
                                             }
-                                            if (diff === STAT_MARKER || diff === null) {
-                                                arithmeticStopStatus = diff;
-                                                break outerArithmeticLoop;
-                                            }
-                                            const compState = arithmeticState.compStateByType[c.type];
-                                            coeff[blockOffset] = (compState.lastDcVal | 0) << Al;
-                                            dcBlocksDecoded++;
 
-                                            const acStatus = decodeArithmeticAcBlock(blockOffset, c);
-                                            if (acStatus === STAT_RST) {
-                                                rstEvents++;
-                                                resetArithmeticRestartState(true);
-                                                continue;
+                                            if (isSequential || isAcFirst) {
+                                                const acStart = isSequential ? 1 : Ss;
+                                                const acEnd = isSequential ? 63 : Se;
+                                                const acStatus = decodeArithmeticAcBlock(blockOffset, c, acStart, acEnd);
+                                                if (acStatus === STAT_RST) {
+                                                    rstEvents++;
+                                                    resetArithmeticRestartState(true);
+                                                    continue;
+                                                }
+                                                if (acStatus === STAT_MARKER || acStatus === null) {
+                                                    arithmeticStopStatus = acStatus;
+                                                    break outerArithmeticLoop;
+                                                }
+                                                acBlocksDecoded++;
                                             }
-                                            if (acStatus === STAT_MARKER || acStatus === null) {
-                                                arithmeticStopStatus = acStatus;
-                                                break outerArithmeticLoop;
-                                            }
-                                            acBlocksDecoded++;
                                             mcuDone = true;
                                         }
                                     }
