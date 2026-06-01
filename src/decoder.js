@@ -823,13 +823,16 @@
                                         arithmeticState.acBandContextByType[compType].fill(0);
                                     }
                                 };
+                                const compByType = {};
+                                for (const c of comps) compByType[c.type] = c;
                                 outerArithmeticLoop:
                                 for (let m = 0; m < cols * rows; m++) {
                                     let mcuDone = false;
-                                    for (const c of comps) {
-                                        for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
+                                    for (let bIdx = 0; bIdx < blocksPerMCU; bIdx++) {
                                             const blk = blockList[m * blocksPerMCU + bIdx];
-                                            if (!blk || blk.comp !== c.type) continue;
+                                            if (!blk) continue;
+                                            const c = compByType[blk.comp];
+                                            if (!c) continue;
 
                                             const blockOffset = (m * blocksPerMCU + bIdx) * 64;
                                             if (blockOffset + 64 > coeff.length) break outerArithmeticLoop;
@@ -896,7 +899,6 @@
                                                 acBlocksDecoded++;
                                             }
                                             mcuDone = true;
-                                        }
                                     }
                                     if (mcuDone && restartIntervalMCUs > 0) {
                                         mcusSinceRestart++;
