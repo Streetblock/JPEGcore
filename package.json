@@ -27,7 +27,7 @@
     "build": "node scripts/build-core.js",
     "build:noarith": "node scripts/build-core.js --no-arithmetic --output JPEGcore.noarith.js",
     "pretest": "npm run build",
-    "test": "node tests/smoke.test.js && node tests/arithmetic-fixture.test.js",
+    "test": "node tests/smoke.test.js && node tests/render.test.js && node tests/contracts.test.js && node tests/decode-fixtures.test.js && node tests/encode-roundtrip.test.js && node tests/arithmetic-fixture.test.js",
     "fixture:sof10": "node scripts/generate-sof10-fixture.js",
     "arith:golden": "node scripts/arithmetic-golden-compare.js",
     "trace:export": "node scripts/arith-trace-export.js",
