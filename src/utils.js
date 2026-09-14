@@ -1,5 +1,23 @@
     Utils: {
 
+        // Preserve native ImageData in browsers; Node callers only need the
+        // pixel buffer and dimensions and should not require a canvas polyfill.
+        createImageData: function(dataOrWidth, width, height) {
+            if (typeof ImageData !== "undefined") {
+                return typeof dataOrWidth === "number"
+                    ? new ImageData(dataOrWidth, width)
+                    : new ImageData(dataOrWidth, width, height);
+            }
+            if (typeof dataOrWidth === "number") {
+                return {
+                    data: new Uint8ClampedArray(dataOrWidth * width * 4),
+                    width: dataOrWidth,
+                    height: width
+                };
+            }
+            return { data: dataOrWidth, width, height };
+        },
+
         // --- 1. HUFFMAN TREE GENERATOR ---
         // Konvertiert die JPEG-Standard-Tabellenform in einen navigierbaren binären Baum.
         makeHuffmanTree: function(L, V) {

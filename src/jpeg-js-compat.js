@@ -75,7 +75,7 @@
                 throw new Error("JpegJsCompat.encode: data length must be width*height*3 or width*height*4");
             }
 
-            const imgData = new ImageData(rgba, width, height);
+            const imgData = { data: rgba, width, height };
             const encoder = new JpegCORE.Encoder(q);
             const bytes = encoder.encodeImageData(imgData, mode);
 

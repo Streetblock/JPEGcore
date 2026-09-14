@@ -55,6 +55,24 @@ const JpegCORE = {
 
     Utils: {
 
+        // Preserve native ImageData in browsers; Node callers only need the
+        // pixel buffer and dimensions and should not require a canvas polyfill.
+        createImageData: function(dataOrWidth, width, height) {
+            if (typeof ImageData !== "undefined") {
+                return typeof dataOrWidth === "number"
+                    ? new ImageData(dataOrWidth, width)
+                    : new ImageData(dataOrWidth, width, height);
+            }
+            if (typeof dataOrWidth === "number") {
+                return {
+                    data: new Uint8ClampedArray(dataOrWidth * width * 4),
+                    width: dataOrWidth,
+                    height: width
+                };
+            }
+            return { data: dataOrWidth, width, height };
+        },
+
         // --- 1. HUFFMAN TREE GENERATOR ---
         // Konvertiert die JPEG-Standard-Tabellenform in einen navigierbaren binären Baum.
         makeHuffmanTree: function(L, V) {
@@ -2162,11 +2180,11 @@ const JpegCORE = {
 
         // --- 3. OPTIMIZED RENDERER (Bit-Shifting + Robustness)  (Universal: 4:4:4, 4:2:2, 4:2:0) ---
         render: function(decoded, scale = 1.0) {
-            if (!decoded) return new ImageData(1, 1);
+            if (!decoded) return JpegCORE.Utils.createImageData(1, 1);
 
             if (decoded.preDecodedData && decoded.w && decoded.h) {
                 const srcW = decoded.w, srcH = decoded.h;
-                if (scale === 1.0) return new ImageData(new Uint8ClampedArray(decoded.preDecodedData), srcW, srcH);
+                if (scale === 1.0) return JpegCORE.Utils.createImageData(new Uint8ClampedArray(decoded.preDecodedData), srcW, srcH);
                 const w = Math.max(1, Math.ceil(srcW * scale));
                 const h = Math.max(1, Math.ceil(srcH * scale));
                 const out = new Uint8ClampedArray(w * h * 4);
@@ -2182,15 +2200,15 @@ const JpegCORE = {
                         out[dIdx + 3] = decoded.preDecodedData[sIdx + 3];
                     }
                 }
-                return new ImageData(out, w, h);
+                return JpegCORE.Utils.createImageData(out, w, h);
             }
             // 1. Daten prüfen
             const blockList = decoded.blockList || decoded.blocks;
-            if (!blockList || blockList.length === 0) return new ImageData(1, 1);
+            if (!blockList || blockList.length === 0) return JpegCORE.Utils.createImageData(1, 1);
 
             const w = Math.ceil(decoded.w * scale);
             const h = Math.ceil(decoded.h * scale);
-            if (w === 0 || h === 0) return new ImageData(1, 1);
+            if (w === 0 || h === 0) return JpegCORE.Utils.createImageData(1, 1);
 
             // 2. Setup
             const blockSize = (scale === 0.5) ? 4 : (scale === 0.25 ? 2 : (scale === 0.125 ? 1 : 8));
@@ -2259,7 +2277,7 @@ const JpegCORE = {
                     }
                 }
 
-                return new ImageData(finalData, w, h);
+                return JpegCORE.Utils.createImageData(finalData, w, h);
             }
 
             if (mode === '420' && blockSize === 8) {
@@ -2361,7 +2379,7 @@ const JpegCORE = {
                     }
                 }
 
-                return new ImageData(finalData, w, h);
+                return JpegCORE.Utils.createImageData(finalData, w, h);
             }
 
             // --- 3. Main Loop ---
@@ -2460,7 +2478,7 @@ const JpegCORE = {
                 }
             }
 
-            return new ImageData(finalData, w, h);
+            return JpegCORE.Utils.createImageData(finalData, w, h);
         }
     },
 
@@ -3176,7 +3194,7 @@ const JpegCORE = {
                 throw new Error("JpegJsCompat.encode: data length must be width*height*3 or width*height*4");
             }
 
-            const imgData = new ImageData(rgba, width, height);
+            const imgData = { data: rgba, width, height };
             const encoder = new JpegCORE.Encoder(q);
             const bytes = encoder.encodeImageData(imgData, mode);
 
@@ -3189,6 +3207,10 @@ const JpegCORE = {
     }
 
 };
+
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = JpegCORE;
+}
 
 
 
