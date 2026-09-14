@@ -1,5 +1,17 @@
     Utils: {
 
+        validateDecodeOptions: function(options) {
+            if (!options || typeof options !== "object") throw new TypeError("JPEG decode options must be an object");
+            if (options.maxMemoryUsageInMB !== undefined) {
+                throw new Error("Unsupported JPEG decode option: maxMemoryUsageInMB; a memory budget is not implemented");
+            }
+            const maxResolutionInMP = options.maxResolutionInMP;
+            if (maxResolutionInMP !== undefined && (!Number.isFinite(maxResolutionInMP) || maxResolutionInMP <= 0)) {
+                throw new RangeError("maxResolutionInMP must be a positive finite number");
+            }
+            return { maxResolutionInMP };
+        },
+
         validateJpegDimensions: function(width, height) {
             if (!Number.isInteger(width) || !Number.isInteger(height) ||
                 width < 1 || height < 1 || width > 65535 || height > 65535) {

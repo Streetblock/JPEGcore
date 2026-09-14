@@ -2,7 +2,7 @@
 
 **Aktualisiert am 15.09.2026 · Stand: `main`, einschließlich der mit diesem Dokument eingecheckten Fixes. Ausgangspunkt der Nachprüfung: `55e64d1`.**
 
-**Status: Alle neun ursprünglichen Befunde und Befunde 10–11 sind behoben. Drei weitere Befunde (12–14) sind offen und reproduziert.** Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
+**Status: Alle neun ursprünglichen Befunde und Befunde 10–12 sind behoben. Zwei weitere Befunde (13–14) sind offen und reproduziert.** Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
 
 Schwerpunkt: JavaScript-Library in `Repo/src`, ausgeliefertes Bundle, Paket-Einstieg und Tests. `Referenz` und lokale libjpeg-turbo-Werkzeuge dienen als unabhängige Vergleiche. Der experimentelle `rust-port` ist nicht Gegenstand eines vollständigen Reviews. Neue Fixes werden einzeln mit Regressionstests, Build-Ausgabe und aktualisiertem Review-Status eingecheckt.
 
@@ -51,13 +51,13 @@ Ein mit `cjpeg -quality 90 -sample 1x2` erzeugtes JPEG mit vertikalem Chroma-Sub
 
 Behebung: Sampling-Faktoren aller Komponenten vor der Koeffizientenallokation prüfen. Unterstützt bleiben GRAY 1x1 und YCbCr 444/422/420 mit Chroma 1x1; andere Kombinationen werden mit `Unsupported JPEG sampling` abgelehnt. 4:4:0-Unterstützung bleibt eine mögliche Erweiterung. Regression: `tests/sampling-validation.test.js`, unabhängige 4:4:0-Fixture, abweichende Y/Cb/Cr-Faktoren und gültige unterstützte Modi.
 
-### 12. [P2] OFFEN – Angeforderte Decode-Ressourcenlimits werden ignoriert
+### 12. [P2] BEHOBEN – Angeforderte Decode-Ressourcenlimits werden ignoriert
 
 Stelle: `src/jpeg-js-compat.js`, `JpegJsCompat.decode`.
 
 Die Optionen `maxResolutionInMP` und `maxMemoryUsageInMB` werden nicht ausgewertet. Eine gültige 8×8-Fixture wird selbst mit jeweils `0.000001` als Limit decodiert; die jpeg-js-Referenz lehnt sie mit einem Limitfehler ab. Die vorhandene globale Dimensionsgrenze ersetzt diese vom Aufrufer angeforderten Limits nicht.
 
-Nächster Schritt: Ressourcenlimits vor relevanten Allokationen durchsetzen oder die fehlende Optionsunterstützung explizit melden und dokumentieren. Besonders relevant für Anwendungen, die sich bei fremden Uploads auf diese Optionen verlassen. Der Repro belegt die ignorierten Optionen, keinen durchgeführten Speichererschöpfungsangriff.
+Behebung: `maxResolutionInMP` wird validiert und vor der großen Koeffizientenallokation sowie vor nativem Decodieren durchgesetzt. Das gilt für den Wrapper und beide Block-Decoder. `maxMemoryUsageInMB` wird ausdrücklich als **nicht implementiert** abgelehnt, bereits vor dem Lesen/Kopieren der Eingabe. Die stille Missachtung beider Optionen ist damit behoben; ein echtes Speicherbudget bleibt eine mögliche Erweiterung. Das Auflösungslimit ersetzt kein Gesamt-Speicherlimit. Regression: `tests/decode-limits.test.js`, einschließlich exakter Pixelgrenze, ungültiger Werte, aller drei APIs und progressivem Decode mit nativer Option.
 
 ### 13. [P2] OFFEN – JPEG ohne einzigen Scan wird als graues Bild akzeptiert
 
@@ -77,7 +77,7 @@ Nächster Schritt: `save` um die flache Repräsentation erweitern oder eine expl
 
 ## Aktuelle Validierung und Grenzen
 
-- `npm.cmd test` am 15.09.2026 erneut erfolgreich: Build und alle **15 Testsuiten**.
+- `npm.cmd test` am 15.09.2026 erneut erfolgreich: Build und alle **16 Testsuiten**.
 - `node tests/node-runtime.test.js` zusätzlich erfolgreich: Der tatsächliche Paket-Einstieg mit `require("..")` funktioniert ohne Browser-Polyfills.
 - `node artifacts/review/more-findings.cjs` reproduzierte Befunde 10–14 auf `55e64d1`. Behobene Fälle werden jetzt durch die bei den Befunden genannten Tests in `npm test` abgesichert. Offene Befunde sind durch grüne bestehende Tests nicht ausgeschlossen.
 - Der im selben Skript geprüfte einfache 4:4:4-Fall für `Glitch.swapChannels` zeigte zwischen Vorschau und gespeichertem Bild keine Abweichung. Daraus wird kein weiterer bestätigter Fehler abgeleitet.

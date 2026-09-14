@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Enforced optional maxResolutionInMP before coefficient allocation/native decoding; explicitly rejected the unimplemented maxMemoryUsageInMB option instead of ignoring it.
+
 - Validated all component sampling factors; rejected unsupported layouts such as 4:4:0 instead of treating them as 4:4:4.
 
 - Rejected RGB component and CMYK/YCCK JPEGs explicitly instead of decoding them as YCbCr.

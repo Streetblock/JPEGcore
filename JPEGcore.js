@@ -55,6 +55,18 @@ const JpegCORE = {
 
     Utils: {
 
+        validateDecodeOptions: function(options) {
+            if (!options || typeof options !== "object") throw new TypeError("JPEG decode options must be an object");
+            if (options.maxMemoryUsageInMB !== undefined) {
+                throw new Error("Unsupported JPEG decode option: maxMemoryUsageInMB; a memory budget is not implemented");
+            }
+            const maxResolutionInMP = options.maxResolutionInMP;
+            if (maxResolutionInMP !== undefined && (!Number.isFinite(maxResolutionInMP) || maxResolutionInMP <= 0)) {
+                throw new RangeError("maxResolutionInMP must be a positive finite number");
+            }
+            return { maxResolutionInMP };
+        },
+
         validateJpegDimensions: function(width, height) {
             if (!Number.isInteger(width) || !Number.isInteger(height) ||
                 width < 1 || height < 1 || width > 65535 || height > 65535) {
@@ -1010,7 +1022,8 @@ const JpegCORE = {
 
         // --- 2. HYBRID DECODER (Final Fix: RST + Progressive EOB Refinement) ---
 
-        extractBlocksStruct: async function(file) {
+        extractBlocksStruct: async function(file, options = {}) {
+            const { maxResolutionInMP } = JpegCORE.Utils.validateDecodeOptions(options);
             try {
                 const buf = await file.arrayBuffer();
                 const d = new Uint8Array(buf);
@@ -1279,6 +1292,11 @@ const JpegCORE = {
                 }
                 if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
                     throw new Error(`Bildmaße zu groß: ${w}x${h}`);
+                }
+                if (maxResolutionInMP !== undefined && w * h > maxResolutionInMP * 1000000) {
+                    const error = new RangeError(`maxResolutionInMP limit exceeded: ${w}x${h}`);
+                    error.code = "JPEG_RESOLUTION_LIMIT";
+                    throw error;
                 }
 
                 // Progressive fallback:
@@ -2188,6 +2206,7 @@ const JpegCORE = {
                 return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, restartIntervalMCUs, decodeBackend: 'internal' };
 
             } catch (globalErr) {
+                if (globalErr && globalErr.code === "JPEG_RESOLUTION_LIMIT") throw globalErr;
                 if (globalErr && globalErr.message && globalErr.message.startsWith("Unsupported JPEG")) throw globalErr;
                 if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic JPEG")) {
                     throw globalErr;
@@ -2198,9 +2217,9 @@ const JpegCORE = {
         },//*/
 
         // Wrapper für Abwärtskompatibilität zu v1.8.0
-        extractBlocks: async function(file) {
+        extractBlocks: async function(file, options = {}) {
             // 1. Die neue, schnelle Funktion aufrufen
-            const optimized = await this.extractBlocksStruct(file);
+            const optimized = await this.extractBlocksStruct(file, options);
 
             if (optimized && optimized.preDecodedData && !optimized.blockList) {
                 return {
@@ -3301,6 +3320,7 @@ const JpegCORE = {
         // jpeg-js compatible async decode wrapper.
         // Accepts Uint8Array/ArrayBuffer/Buffer/Blob and returns { data, width, height }.
         decode: async function(input, opts = {}) {
+            const limits = JpegCORE.Utils.validateDecodeOptions(opts);
             const useTArray = opts.useTArray !== false;
             const formatAsRGBA = opts.formatAsRGBA !== false;
 
@@ -3315,7 +3335,7 @@ const JpegCORE = {
                 throw new Error("JpegJsCompat.decode: unsupported input type");
             }
 
-            const decoded = await JpegCORE.Decoder.extractBlocksStruct(blob);
+            const decoded = await JpegCORE.Decoder.extractBlocksStruct(blob, limits);
             if (!decoded.preDecodedData && (!decoded.w || !decoded.h || (!decoded.coeffBuffer && !decoded.blockList && !decoded.blocks))) {
                 throw new Error("JpegJsCompat.decode: unsupported or invalid JPEG");
             }

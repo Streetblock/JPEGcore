@@ -2,6 +2,7 @@
         // jpeg-js compatible async decode wrapper.
         // Accepts Uint8Array/ArrayBuffer/Buffer/Blob and returns { data, width, height }.
         decode: async function(input, opts = {}) {
+            const limits = JpegCORE.Utils.validateDecodeOptions(opts);
             const useTArray = opts.useTArray !== false;
             const formatAsRGBA = opts.formatAsRGBA !== false;
 
@@ -16,7 +17,7 @@
                 throw new Error("JpegJsCompat.decode: unsupported input type");
             }
 
-            const decoded = await JpegCORE.Decoder.extractBlocksStruct(blob);
+            const decoded = await JpegCORE.Decoder.extractBlocksStruct(blob, limits);
             if (!decoded.preDecodedData && (!decoded.w || !decoded.h || (!decoded.coeffBuffer && !decoded.blockList && !decoded.blocks))) {
                 throw new Error("JpegJsCompat.decode: unsupported or invalid JPEG");
             }

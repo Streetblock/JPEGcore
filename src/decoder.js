@@ -189,7 +189,8 @@
 
         // --- 2. HYBRID DECODER (Final Fix: RST + Progressive EOB Refinement) ---
 
-        extractBlocksStruct: async function(file) {
+        extractBlocksStruct: async function(file, options = {}) {
+            const { maxResolutionInMP } = JpegCORE.Utils.validateDecodeOptions(options);
             try {
                 const buf = await file.arrayBuffer();
                 const d = new Uint8Array(buf);
@@ -458,6 +459,11 @@
                 }
                 if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
                     throw new Error(`Bildmaße zu groß: ${w}x${h}`);
+                }
+                if (maxResolutionInMP !== undefined && w * h > maxResolutionInMP * 1000000) {
+                    const error = new RangeError(`maxResolutionInMP limit exceeded: ${w}x${h}`);
+                    error.code = "JPEG_RESOLUTION_LIMIT";
+                    throw error;
                 }
 
                 // Progressive fallback:
@@ -1367,6 +1373,7 @@
                 return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, restartIntervalMCUs, decodeBackend: 'internal' };
 
             } catch (globalErr) {
+                if (globalErr && globalErr.code === "JPEG_RESOLUTION_LIMIT") throw globalErr;
                 if (globalErr && globalErr.message && globalErr.message.startsWith("Unsupported JPEG")) throw globalErr;
                 if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic JPEG")) {
                     throw globalErr;
@@ -1377,9 +1384,9 @@
         },//*/
 
         // Wrapper für Abwärtskompatibilität zu v1.8.0
-        extractBlocks: async function(file) {
+        extractBlocks: async function(file, options = {}) {
             // 1. Die neue, schnelle Funktion aufrufen
-            const optimized = await this.extractBlocksStruct(file);
+            const optimized = await this.extractBlocksStruct(file, options);
 
             if (optimized && optimized.preDecodedData && !optimized.blockList) {
                 return {

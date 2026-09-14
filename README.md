@@ -49,6 +49,15 @@ console.log(decoded.width, decoded.height, decoded.data.length);
 for either RGB or RGBA output. Environments without `Buffer` must use
 `useTArray: true`.
 
+`maxResolutionInMP` optionally limits decoded pixels (1 MP = 1,000,000 pixels).
+It must be a positive finite number; exceeding it rejects decoding before
+coefficient buffers or native image decoding are started. The same option is
+accepted by `Decoder.extractBlocksStruct(blob, options)` and
+`Decoder.extractBlocks(blob, options)`. The global dimension limit also applies.
+`maxMemoryUsageInMB` is **not implemented**: supplying it explicitly rejects
+the operation before input conversion rather than silently ignoring the limit.
+The resolution limit does not impose a total memory or input-file-size limit.
+
 The Node.js wrappers use the built-in `Blob` and do not require a canvas or
 `ImageData` polyfill. `Decoder.render(...)` returns a `{ data, width, height }`
 pixel object when `ImageData` is unavailable; in browsers it returns native
@@ -58,7 +67,8 @@ Encoder dimensions must be integer numbers from 1 to 65535; invalid dimensions
 and mismatched pixel-buffer lengths are rejected before encoding. The decoder's
 separate `Constants.MAX_DIMENSION` limit still applies when reading images.
 `Decoder.extractBlocks` rejects unsupported or invalid JPEGs with a descriptive
-error; `extractBlocksStruct` retains its empty-result fallback for those inputs.
+error; `extractBlocksStruct` retains its empty-result fallback for general parse
+failures, but propagates explicit unsupported-format and resource-option errors.
 
 Decoding accepts both 8-bit and 16-bit quantization tables, including mixed
 precision tables. This does not add support for 12-bit sample precision.
