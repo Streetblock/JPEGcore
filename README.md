@@ -97,6 +97,10 @@ change with `forceNewQuality` to re-quantize into the baseline range instead.
 ## Image transforms
 
 `Transformer.rotate90`, `flipH`, and `flipV` update a decoded image in place.
+`Encoder.save` accepts both legacy `blocks` from `extractBlocks` and flat
+`coeffBuffer`/`blockList` from `extractBlocksStruct`, including after transforms.
+It validates the block count and coefficient-buffer shape before encoding;
+saving and changing quality do not modify the captured coefficients.
 They transform quantized coefficients without re-encoding whenever the sampling
 layout and relevant image edge permit it. Rotation also transposes quantization
 tables. Both legacy blocks and the flat coefficient representation are accepted.

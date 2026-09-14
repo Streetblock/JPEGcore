@@ -2,7 +2,7 @@
 
 **Aktualisiert am 15.09.2026 · Stand: `main`, einschließlich der mit diesem Dokument eingecheckten Fixes. Ausgangspunkt der Nachprüfung: `55e64d1`.**
 
-**Status: Alle neun ursprünglichen Befunde und Befunde 10–13 sind behoben. Befund 14 ist noch offen und reproduziert.** Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
+**Status: Alle 14 dokumentierten Befunde sind behoben. Keine offenen Fehler aus dieser Befundliste.** Bei RGB/4:4:0 und der Speicheroption besteht die Behebung in einer ausdrücklichen Ablehnung nicht unterstützter Funktionen; siehe die Grenzen unten. Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
 
 Schwerpunkt: JavaScript-Library in `Repo/src`, ausgeliefertes Bundle, Paket-Einstieg und Tests. `Referenz` und lokale libjpeg-turbo-Werkzeuge dienen als unabhängige Vergleiche. Der experimentelle `rust-port` ist nicht Gegenstand eines vollständigen Reviews. Neue Fixes werden einzeln mit Regressionstests, Build-Ausgabe und aktualisiertem Review-Status eingecheckt.
 
@@ -67,17 +67,24 @@ Ein Bytepuffer mit SOI, einem SOF0 für ein 8×8-Graubild und EOI, jedoch ohne S
 
 Behebung: Ein SOS-Scan ist vor der Koeffizientenallokation zwingend erforderlich. SOS-Längen und Komponenten-IDs werden validiert; leere Huffman-Scans werden abgelehnt. Alle drei APIs propagieren einen verständlichen `Invalid JPEG scan`-Fehler. Regression: `tests/scan-validation.test.js`, einschließlich fehlendem/abgeschnittenem SOS, leeren Daten, ungültigen Komponenten und einem gültigen grauen Bild. Dies ist keine vollständige strikte Prüfung jedes Entropie-Bits beschädigter Dateien.
 
-### 14. [P2] OFFEN – Flache Blockdaten lassen sich nach Transformation nicht speichern
+### 14. [P2] BEHOBEN – Flache Blockdaten lassen sich nach Transformation nicht speichern
 
 Stelle: `src/encoder.js`, `save`, Schleife über `captured.blocks.length`.
 
 `Decoder.extractBlocksStruct` → `Transformer.rotate90` → `Encoder.save` scheitert mit `Cannot read properties of undefined (reading 'length')`. Der Transformer unterstützt die flache Repräsentation inzwischen, der Encoder erwartet weiterhin das Legacy-Feld `blocks`. Es handelt sich um eine Lücke zwischen den API-Datenformaten; der Legacy-Pfad mit `extractBlocks` ist davon nicht betroffen.
 
-Nächster Schritt: `save` um die flache Repräsentation erweitern oder eine explizite Konvertierung mit verständlicher Eingabeprüfung bereitstellen. Den gesamten Ablauf als Integrationstest absichern.
+Behebung: `save` liest flache Koeffizienten über `coeffBuffer` und Metadaten über `blockList`; es prüft Blockanzahl, Puffertyp/-länge und Komponenten. Legacy-Daten bleiben unterstützt. Regression: `tests/flat-save.test.js` mit 64 vollständigen Abläufen über vier Sampling-Modi, gerade/ungerade Dimensionen, Drehen/Spiegeln und Beibehalten/Ändern der Qualität. Flache und Legacy-Ausgabe sind bytegleich, wieder decodierbar und verändern die Quelldaten nicht.
+
+## Verbleibende Funktionsgrenzen und mögliche Erweiterungen
+
+- RGB-Komponenten, CMYK/YCCK und 4:4:0 werden ausdrücklich abgelehnt; native Unterstützung dieser Formate ist noch nicht implementiert.
+- `maxResolutionInMP` wird durchgesetzt. Ein echtes Speicherbudget über `maxMemoryUsageInMB` ist nicht implementiert; wer die Option angibt, erhält einen Fehler vor der Verarbeitung.
+- Die Scan-Validierung verhindert die dokumentierten falschen Erfolgsergebnisse. Vollständig striktes Decodieren aller beschädigten Entropiedaten und ein umfassender Fuzzing-Audit bleiben außerhalb dieses Fix-Pakets.
+- Ein npm-Release ist getrennt von den Git-Commits; seine Veröffentlichung wurde nicht vorgenommen oder verifiziert.
 
 ## Aktuelle Validierung und Grenzen
 
-- `npm.cmd test` am 15.09.2026 erneut erfolgreich: Build und alle **17 Testsuiten**.
+- `npm.cmd test` am 15.09.2026 erneut erfolgreich: Build und alle **18 Testsuiten**.
 - `node tests/node-runtime.test.js` zusätzlich erfolgreich: Der tatsächliche Paket-Einstieg mit `require("..")` funktioniert ohne Browser-Polyfills.
 - `node artifacts/review/more-findings.cjs` reproduzierte Befunde 10–14 auf `55e64d1`. Behobene Fälle werden jetzt durch die bei den Befunden genannten Tests in `npm test` abgesichert. Offene Befunde sind durch grüne bestehende Tests nicht ausgeschlossen.
 - Der im selben Skript geprüfte einfache 4:4:4-Fall für `Glitch.swapChannels` zeigte zwischen Vorschau und gespeichertem Bild keine Abweichung. Daraus wird kein weiterer bestätigter Fehler abgeleitet.

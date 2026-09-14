@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accepted flat coefficient buffers in Encoder.save, including transformed results, with block-shape validation and no source mutation during quality changes.
+
 - Rejected JPEG frames without an image scan, malformed SOS headers and empty Huffman scans instead of returning a successful gray image.
 
 - Enforced optional maxResolutionInMP before coefficient allocation/native decoding; explicitly rejected the unimplemented maxMemoryUsageInMB option instead of ignoring it.

@@ -3151,8 +3151,24 @@ const JpegCORE = {
             const M = JpegCORE.Constants.MARKERS;
             const wr = (v) => { this.buf.push((v >> 8) & 0xFF, v & 0xFF); }, wb = (v) => { this.buf.push(v); };
             const sm = JpegCORE.Constants.SAMPLE_MODES[captured.mode];
+            if (!sm) throw new Error("Encoder.save: unsupported sampling mode");
             const isGray = (captured.mode === 'GRAY'), numComps = isGray ? 1 : 3;
             const w = captured.w, h = captured.h;
+            const isFlat = captured.coeffBuffer != null;
+            const blocks = isFlat ? captured.blockList : captured.blocks;
+            const expectedBlocks = Math.ceil(w / (sm.hMax * 8)) * Math.ceil(h / (sm.vMax * 8)) * sm.blocks.length;
+            if (!Array.isArray(blocks) || blocks.length !== expectedBlocks) {
+                throw new Error("Encoder.save: block list length does not match image dimensions and sampling");
+            }
+            if (isFlat && (!(captured.coeffBuffer instanceof Int32Array) || captured.coeffBuffer.length !== blocks.length * 64)) {
+                throw new Error("Encoder.save: coefficient buffer must contain 64 Int32 values per block");
+            }
+            for (const block of blocks) {
+                if (!block || !Number.isInteger(block.comp) || block.comp < 0 || block.comp >= numComps ||
+                    (!isFlat && (!block.data || block.data.length !== 64))) {
+                    throw new Error("Encoder.save: invalid block component or coefficient data");
+                }
+            }
 
             const sourceQT = {};
             if (captured.quantTables) {
@@ -3205,9 +3221,9 @@ const JpegCORE = {
 
             let pd = [0, 0, 0];
             const requantized = new Int32Array(64);
-            for (let i = 0; i < captured.blocks.length; i++) {
-                const blkObj = captured.blocks[i], compIdx = blkObj.comp;
-                let data = blkObj.data;
+            for (let i = 0; i < blocks.length; i++) {
+                const blkObj = blocks[i], compIdx = blkObj.comp;
+                let data = isFlat ? captured.coeffBuffer.subarray(i * 64, (i + 1) * 64) : blkObj.data;
                 if (forceNewQuality && sourceQT[compIdx]) {
                     const oldQT = sourceQT[compIdx], newQT = componentTables[compIdx];
                     for (let k = 0; k < 64; k++) {
