@@ -122,4 +122,67 @@ assert.equal(tiny420.width, 4);
 assert.equal(tiny420.height, 4);
 assert.notEqual(tiny420.data[0], tiny420.data[(3 * tiny420.width + 3) * 4], "12.5% render must sample beyond the first MCU");
 
+// Compare reduced renders with independently averaged full-size pixels. Keep
+// chroma constant within each MCU and avoid clipping, so RGB averaging remains
+// equivalent to component averaging (apart from integer rounding).
+for (const mode of ["GRAY", "444", "422", "420"]) {
+  const sm = JpegCORE.Constants.SAMPLE_MODES[mode];
+  for (const [width, height] of [[1, 1], [9, 7], [17, 15], [31, 17], [33, 35]]) {
+    const cols = Math.ceil(width / (sm.hMax * 8));
+    const rows = Math.ceil(height / (sm.vMax * 8));
+    const blocks = [];
+    for (let m = 0; m < cols * rows; m++) {
+      for (let b = 0; b < sm.blocks.length; b++) {
+        const def = sm.blocks[b];
+        const comp = def.t === "Y" ? 0 : def.c + 1;
+        const data = makeDcBlock(((m * 7 + b * 3) % 17 - 8) * 8);
+        if (comp === 0) {
+          data[1] = 12;
+          data[8] = -8;
+        }
+        blocks.push({ data, type: def.t, comp });
+      }
+    }
+    const decoded = {
+      blocks, w: width, h: height, mode,
+      quantTables: { 0: new Uint8Array(64).fill(1) },
+      compMap: [0, 1, 2].map(type => ({ type, tq: 0 }))
+    };
+    // Include the encoded edge padding in the averaging reference.
+    const padded = JpegCORE.Decoder.render({
+      ...decoded, w: cols * sm.hMax * 8, h: rows * sm.vMax * 8
+    });
+    const coeffBuffer = new Int32Array(blocks.length * 64);
+    blocks.forEach((block, i) => coeffBuffer.set(block.data, i * 64));
+    for (const scale of [0.5, 0.25, 0.125]) {
+      const step = 1 / scale;
+      const legacy = JpegCORE.Decoder.render(decoded, scale);
+      const flat = JpegCORE.Decoder.render({
+        ...decoded, blocks: undefined, coeffBuffer,
+        blockList: blocks.map(({ type, comp }) => ({ type, comp }))
+      }, scale);
+      assert.equal(legacy.width, Math.ceil(width * scale));
+      assert.equal(legacy.height, Math.ceil(height * scale));
+      assert.deepEqual(flat.data, legacy.data, "flat and legacy scaled renders must agree");
+      for (let y = 0; y < legacy.height; y++) {
+        for (let x = 0; x < legacy.width; x++) {
+          const offset = (y * legacy.width + x) * 4;
+          assert.equal(legacy.data[offset + 3], 255);
+          for (let channel = 0; channel < 3; channel++) {
+            let sum = 0;
+            for (let dy = 0; dy < step; dy++) {
+              for (let dx = 0; dx < step; dx++) {
+                sum += padded.data[((y * step + dy) * padded.width + x * step + dx) * 4 + channel];
+              }
+            }
+            const expected = Math.round(sum / (step * step));
+            assert.ok(Math.abs(legacy.data[offset + channel] - expected) <= 2,
+              `${mode} ${width}x${height} scale=${scale} pixel=${x},${y} channel=${channel}: ${legacy.data[offset + channel]} vs ${expected}`);
+          }
+        }
+      }
+    }
+  }
+}
+
 console.log("JPEG render tests passed.");
