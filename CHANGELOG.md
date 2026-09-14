@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rejected RGB component and CMYK/YCCK JPEGs explicitly instead of decoding them as YCbCr.
+
 - Decoded 16-bit quantization tables without truncation and exposed them through image analysis.
 - Validated encoder dimensions and pixel-buffer lengths before processing input.
 - Replaced the legacy decoder's invalid-input TypeError with a descriptive JPEG error.

@@ -62,6 +62,9 @@ error; `extractBlocksStruct` retains its empty-result fallback for those inputs.
 
 Decoding accepts both 8-bit and 16-bit quantization tables, including mixed
 precision tables. This does not add support for 12-bit sample precision.
+RGB component JPEGs (identified by Adobe APP14 or RGB component IDs) and
+CMYK/YCCK JPEGs are rejected with an explicit unsupported-color-space error.
+The decoder currently supports grayscale and YCbCr component data.
 The encoder still writes baseline JPEGs with 8-bit quantizers: preserving a
 table containing values above 255 with `save` is rejected; request a quality
 change with `forceNewQuality` to re-quantize into the baseline range instead.

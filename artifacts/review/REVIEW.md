@@ -1,10 +1,10 @@
 # JPEGcore – Code-Review vom 14.09.2026
 
-**Aktualisiert am 14.09.2026 · geprüfter Stand: `main`, Commit `55e64d1`.**
+**Aktualisiert am 14.09.2026 · Stand: `main`, einschließlich der mit diesem Dokument eingecheckten Fixes. Ausgangspunkt der Nachprüfung: `55e64d1`.**
 
-**Status: Alle neun ursprünglichen Befunde sind behoben. Fünf weitere Befunde sind offen und reproduziert.** Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
+**Status: Alle neun ursprünglichen Befunde und Befund 10 sind behoben. Vier weitere Befunde (11–14) sind offen und reproduziert.** Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
 
-Schwerpunkt: JavaScript-Library in `Repo/src`, ausgeliefertes Bundle, Paket-Einstieg und Tests. `Referenz` und lokale libjpeg-turbo-Werkzeuge dienen als unabhängige Vergleiche. Der experimentelle `rust-port` ist nicht Gegenstand eines vollständigen Reviews. Bei dieser Statusaktualisierung wurden keine Library-Quellen geändert.
+Schwerpunkt: JavaScript-Library in `Repo/src`, ausgeliefertes Bundle, Paket-Einstieg und Tests. `Referenz` und lokale libjpeg-turbo-Werkzeuge dienen als unabhängige Vergleiche. Der experimentelle `rust-port` ist nicht Gegenstand eines vollständigen Reviews. Neue Fixes werden einzeln mit Regressionstests, Build-Ausgabe und aktualisiertem Review-Status eingecheckt.
 
 ## Behoben
 
@@ -31,17 +31,17 @@ Weitere inzwischen erledigte Korrekturen:
 | Verständlicher Fehler statt TypeError bei ungültigen Eingaben im Legacy-Decoder | `55e64d1`; noch keine vollständige Strukturvalidierung, siehe Befund 13 | `tests/input-validation.test.js` |
 | Node-Buffer für explizites `useTArray: false` in RGB und RGBA | `55e64d1` | `tests/input-validation.test.js` |
 
-## Offen – neu reproduziert
+## Nachprüfung – Status der zusätzlichen Befunde
 
-Die Prioritäten sind Review-Einschätzungen. Reproduktion aus `Repo`: `node artifacts/review/more-findings.cjs`. Das Skript benötigt die vorhandenen lokalen `cjpeg.exe`/`djpeg.exe` in `dev/libjpeg-turbo-build` sowie `../Referenz/jpeg-js-decoder.js` und schreibt Testbilder in dieses Artefaktverzeichnis.
+Die Prioritäten sind Review-Einschätzungen. Die Fehlerbeschreibungen dokumentieren den Zustand bei der Nachprüfung von `55e64d1`; der jeweilige Status und Behebungsabsatz beschreiben den aktuellen Stand. Das lokale Skript `more-findings.cjs` diente zur ursprünglichen Reproduktion und setzt lokale libjpeg-turbo-Werkzeuge voraus. Für bereits behobene Befunde gelten die eingecheckten Regressionstests statt dieses historischen Skripts.
 
-### 10. [P1] OFFEN – RGB-JPEGs liefern falsche Farben
+### 10. [P1] BEHOBEN – RGB-JPEGs liefern falsche Farben
 
 Stelle: `src/decoder.js`, Komponentenzuordnung und Farbumrechnung.
 
 Ein mit `cjpeg -quality 90 -rgb -sample 1x1` erzeugtes RGB-JPEG wird angenommen, aber wie YCbCr verarbeitet. Beim 17×19-Testbild beträgt der mittlere absolute RGB-Kanalfehler gegenüber libjpeg-turbo **85,87 auf einer Skala von 0 bis 255**.
 
-Nächster Schritt: RGB-Farbraum erkennen und korrekt verarbeiten oder solche Dateien ausdrücklich als nicht unterstützt ablehnen. Die aktuelle stille Ausgabe falscher Farben sollte behoben werden.
+Behebung: RGB anhand von Adobe APP14 oder RGB-Komponenten-IDs erkennen und mit `Unsupported JPEG color space` ablehnen; ebenso CMYK/YCCK. Damit entfällt die stille Ausgabe falscher Farben. Die Unterstützung dieser Farbräume bleibt eine mögliche Erweiterung. Regression: `tests/color-space.test.js` mit unabhängiger RGB-Fixture, beiden Erkennungswegen, allen drei Decode-Einstiegen und weiterhin akzeptiertem YCbCr mit APP14.
 
 ### 11. [P1] OFFEN – 4:4:0-Sampling wird als 4:4:4 behandelt
 
@@ -77,12 +77,12 @@ Nächster Schritt: `save` um die flache Repräsentation erweitern oder eine expl
 
 ## Aktuelle Validierung und Grenzen
 
-- `npm.cmd test` am 14.09.2026 erneut erfolgreich: Build und alle **13 Testsuiten**.
+- `npm.cmd test` am 14.09.2026 erneut erfolgreich: Build und alle **14 Testsuiten**.
 - `node tests/node-runtime.test.js` zusätzlich erfolgreich: Der tatsächliche Paket-Einstieg mit `require("..")` funktioniert ohne Browser-Polyfills.
-- `node artifacts/review/more-findings.cjs` erneut ausgeführt: Befunde 10–14 reproduziert. Diese zusätzlichen Fälle sind noch nicht als Regressionstests in `npm test` enthalten; grüne bestehende Tests schließen sie daher nicht aus.
+- `node artifacts/review/more-findings.cjs` reproduzierte Befunde 10–14 auf `55e64d1`. Behobene Fälle werden jetzt durch die bei den Befunden genannten Tests in `npm test` abgesichert. Offene Befunde sind durch grüne bestehende Tests nicht ausgeschlossen.
 - Der im selben Skript geprüfte einfache 4:4:4-Fall für `Glitch.swapChannels` zeigte zwischen Vorschau und gespeichertem Bild keine Abweichung. Daraus wird kein weiterer bestätigter Fehler abgeleitet.
 - Kein vollständiger Fuzzing-, Performance-, Sicherheits- oder Rust-Audit. Vollständige Pixelkorrektheit aller Arithmetic-SOF9/SOF10-Varianten ist durch die vorhandenen Smoke-Tests nicht belegt.
-- Diese Datei liegt im von Git ignorierten Verzeichnis `artifacts/review`; ihre Aktualisierung ist zunächst lokal und wird nicht automatisch mit einem normalen Git-Commit veröffentlicht.
+- Diese Datei wird seit Commit `1752ca3` ausdrücklich von Git versioniert, obwohl das übrige Artefaktverzeichnis ignoriert wird.
 
 ## Ursprüngliche Befunde – historisch, alle behoben
 

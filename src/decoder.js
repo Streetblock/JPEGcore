@@ -308,6 +308,7 @@
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
                 let isProgressive = false;
                 let isArithmetic = false;
+                let adobeTransform = null;
                 let restartIntervalMCUs = 0;
                 let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
@@ -408,6 +409,10 @@
                             else finalMode = '444';
                             mcuStructure = SM[finalMode];
                         }
+                    } else if (marker === 0xEE && len >= 14 && segmentEnd <= d.length &&
+                               d[pos + 3] === 65 && d[pos + 4] === 100 && d[pos + 5] === 111 &&
+                               d[pos + 6] === 98 && d[pos + 7] === 101) {
+                        adobeTransform = d[pos + 14];
                     } else if (marker === M.DHT) {
                         let subPos = pos + 3;
                         while (subPos < segmentEnd) {
@@ -432,6 +437,17 @@
                 }
 
                 if (!w || !h || !mcuStructure) return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
+                const hasRgbIds = compMapList.length === 3 &&
+                    compMapList.every((component, i) => component.id === [82, 71, 66][i]);
+                if (compMapList.length !== 1 && compMapList.length !== 3) {
+                    throw new Error("Unsupported JPEG color space: only grayscale and YCbCr are supported");
+                }
+                if (compMapList.length === 3 && (adobeTransform === 0 || hasRgbIds)) {
+                    throw new Error("Unsupported JPEG color space: RGB component data is not supported");
+                }
+                if (adobeTransform !== null && adobeTransform !== 0 && adobeTransform !== 1) {
+                    throw new Error("Unsupported JPEG color space: Adobe transform " + adobeTransform);
+                }
                 if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
                     throw new Error(`Bildmaße zu groß: ${w}x${h}`);
                 }
@@ -1343,6 +1359,7 @@
                 return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, restartIntervalMCUs, decodeBackend: 'internal' };
 
             } catch (globalErr) {
+                if (globalErr && globalErr.message && globalErr.message.startsWith("Unsupported JPEG")) throw globalErr;
                 if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic JPEG")) {
                     throw globalErr;
                 }
