@@ -3056,12 +3056,30 @@ const JpegCORE = {
             const isGray = (captured.mode === 'GRAY'), numComps = isGray ? 1 : 3;
             const w = captured.w, h = captured.h;
 
-            let qY = this.tY, qC = this.tC;
-
-            // Only use original tables if NOT forced to use new quality
-            if (!forceNewQuality && captured.quantTables) {
-                if(captured.quantTables[0]) qY = captured.quantTables[0];
-                if(captured.quantTables[1]) qC = captured.quantTables[1];
+            const sourceQT = {};
+            if (captured.quantTables) {
+                const maps = captured.compMap && captured.compMap.length ? captured.compMap
+                    : [0, 1, 2].map(type => ({ type, tq: type === 0 ? 0 : 1 }));
+                for (const c of maps) sourceQT[c.type] = captured.quantTables[c.tq];
+            }
+            // JPEG component selectors, not table IDs, identify Y/Cb/Cr.
+            // Preserve each component's table and assign compact output IDs.
+            const componentTables = [], outputTables = [], tableSelectors = [];
+            for (let comp = 0; comp < numComps; comp++) {
+                if (forceNewQuality && !sourceQT[comp]) {
+                    throw new Error("Changing JPEG quality requires the original quantization tables");
+                }
+                if (captured.quantTables && !sourceQT[comp]) {
+                    throw new Error(`Missing original quantization table for component ${comp}`);
+                }
+                const table = !forceNewQuality && sourceQT[comp] ? sourceQT[comp] : comp === 0 ? this.tY : this.tC;
+                if (table.length !== 64 || Array.from(table).some(q => !Number.isInteger(q) || q < 1 || q > 255)) {
+                    throw new Error("Baseline JPEG output requires 64 quantizers in the range 1..255");
+                }
+                componentTables[comp] = table;
+                let id = outputTables.findIndex(existing => existing.every((q, i) => q === table[i]));
+                if (id < 0) { id = outputTables.length; outputTables.push(table); }
+                tableSelectors[comp] = id;
             }
 
             const toZigZag = (n) => {
@@ -3078,32 +3096,22 @@ const JpegCORE = {
                 wr(0xFF00 | M.APP0); wr(16); [0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0].forEach(wb);
             }
 
-            wr(0xFF00 | M.DQT); wr(132);
-            wb(0); toZigZag(qY).forEach(v => wb(v));
-            wb(1); toZigZag(qC).forEach(v => wb(v));
+            wr(0xFF00 | M.DQT); wr(2 + outputTables.length * 65);
+            outputTables.forEach((table, id) => { wb(id); toZigZag(table).forEach(wb); });
 
-            wr(0xFF00 | M.SOF0); wr(8 + 3 * numComps); wb(8); wr(h); wr(w); wb(numComps); wb(1); wb((sm.hMax << 4) | sm.vMax); wb(0);
-            if (!isGray) { wb(2); wb(0x11); wb(1); wb(3); wb(0x11); wb(1); }
+            wr(0xFF00 | M.SOF0); wr(8 + 3 * numComps); wb(8); wr(h); wr(w); wb(numComps); wb(1); wb((sm.hMax << 4) | sm.vMax); wb(tableSelectors[0]);
+            if (!isGray) { wb(2); wb(0x11); wb(tableSelectors[1]); wb(3); wb(0x11); wb(tableSelectors[2]); }
             let len = 6, ht = this.curHT; [ht.dclv, ht.aclv, ht.dccv, ht.accv].forEach(v => len += 16 + v.length);
             wr(0xFF00 | M.DHT); wr(len); wb(0x00); ht.dcln.forEach(wb); ht.dclv.forEach(wb); wb(0x10); ht.acln.forEach(wb); ht.aclv.forEach(wb); wb(0x01); ht.dccn.forEach(wb); ht.dccv.forEach(wb); wb(0x11); ht.accn.forEach(wb); ht.accv.forEach(wb);
             wr(0xFF00 | M.SOS); wr(6 + 2 * numComps); wb(numComps); wb(1); wb(0); if (!isGray) { wb(2); wb(0x11); wb(3); wb(0x11); } wb(0); wb(63); wb(0);
 
             let pd = [0, 0, 0];
-            const sourceQT = {};
-            if (captured.quantTables) {
-                for (const c of captured.compMap || [0, 1, 2].map(type => ({ type, tq: type === 0 ? 0 : 1 }))) {
-                    sourceQT[c.type] = captured.quantTables[c.tq];
-                }
-            }
             const requantized = new Int32Array(64);
             for (let i = 0; i < captured.blocks.length; i++) {
                 const blkObj = captured.blocks[i], compIdx = blkObj.comp;
                 let data = blkObj.data;
-                if (forceNewQuality && !sourceQT[compIdx]) {
-                    throw new Error("Changing JPEG quality requires the original quantization tables");
-                }
                 if (forceNewQuality && sourceQT[compIdx]) {
-                    const oldQT = sourceQT[compIdx], newQT = compIdx === 0 ? qY : qC;
+                    const oldQT = sourceQT[compIdx], newQT = componentTables[compIdx];
                     for (let k = 0; k < 64; k++) {
                         const value = data[k] * oldQT[k] / newQT[k];
                         requantized[k] = value < 0 ? -Math.round(-value) : Math.round(value);

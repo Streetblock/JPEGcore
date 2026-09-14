@@ -90,6 +90,10 @@ the image viewer to honor that metadata.
 `Encoder.save(captured, metadata, true)` changes quality by re-quantizing with
 the original component tables. Keep the quantization metadata supplied by
 `extractBlocks` or `captureBlocks`; changing quality without it throws.
+Without a quality change, saving preserves each component's quantization table,
+including shared tables, separate Cb/Cr tables, and nonstandard input table IDs.
+Output table IDs may be reassigned. Missing referenced tables and quantizers
+outside the supported baseline range are rejected instead of silently replaced.
 
 ## Build and Test
 
