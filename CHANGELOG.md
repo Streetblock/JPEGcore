@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Fixed reduced-scale rendering at 50%, 25%, and 12.5%, including odd dimensions and subsampled color.
+- Exported the CommonJS package and removed the Node.js requirement for browser ImageData.
+- Completed the chroma quantization table, clamped encoder quantizers, and corrected quality changes through re-quantization.
+- Fixed restart boundaries in progressive Huffman scans; added independently generated baseline/progressive restart fixtures.
+- Corrected rotation of quantization tables and horizontal 4:2:2 block ordering.
+- Preserved complete images through re-encoding when coefficient transforms cannot represent the requested result; added a losslessOnly option and flat-buffer transform support.
+
 ## 1.0.0 - 2026-05-17
 
 - Fixed progressive JPEG decoding correctness issues

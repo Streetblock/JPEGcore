@@ -59,6 +59,38 @@ pixel object when `ImageData` is unavailable; in browsers it returns native
 </script>
 ```
 
+## Image transforms
+
+`Transformer.rotate90`, `flipH`, and `flipV` update a decoded image in place.
+They transform quantized coefficients without re-encoding whenever the sampling
+layout and relevant image edge permit it. Rotation also transposes quantization
+tables. Both legacy blocks and the flat coefficient representation are accepted.
+
+When a partial MCU edge would move into the visible image, or a 4:2:2 rotation
+would require the unsupported 4:4:0 layout, the default preserves the entire
+image by rendering, transforming, and re-encoding it. This can introduce further
+JPEG loss and increase file size. Color images use 4:4:4 in this fallback;
+grayscale remains grayscale. Original quantization tables are reused when
+available, otherwise quality 90 is used. `transformWasReencoded` indicates
+whether the most recent transform took this fallback.
+
+To require a lossless transform, pass `{ losslessOnly: true }`. If re-encoding
+would be needed, the function throws before modifying the input:
+
+```js
+const decoded = await JpegCORE.Decoder.extractBlocks(new Blob([inputBuffer]));
+JpegCORE.Transformer.rotate90(decoded, { losslessOnly: true });
+const jpegBytes = new JpegCORE.Encoder(90).save(decoded);
+```
+
+These operations transform the stored pixels, not EXIF orientation metadata.
+Changing EXIF orientation alone is a separate display instruction and requires
+the image viewer to honor that metadata.
+
+`Encoder.save(captured, metadata, true)` changes quality by re-quantizing with
+the original component tables. Keep the quantization metadata supplied by
+`extractBlocks` or `captureBlocks`; changing quality without it throws.
+
 ## Build and Test
 
 Build default bundle (with arithmetic decode support):
