@@ -45,6 +45,11 @@ console.log(decoded.width, decoded.height, decoded.data.length);
 
 `decode(...)` returns the `jpeg-js` shape: `{ data, width, height }`.
 
+The Node.js wrappers use the built-in `Blob` and do not require a canvas or
+`ImageData` polyfill. `Decoder.render(...)` returns a `{ data, width, height }`
+pixel object when `ImageData` is unavailable; in browsers it returns native
+`ImageData`.
+
 ## Usage (Browser)
 
 ```html
