@@ -32,7 +32,7 @@ const JpegCORE = {
 
       ZIG_ZAG_ARR: [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63],
       QUANT_L: [16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99],
-      QUANT_C: [17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99],
+      QUANT_C: [17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99],
       HUFFMAN: {
             DC_L_NR: [0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
             DC_L_VAL: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
@@ -1896,6 +1896,26 @@ const JpegCORE = {
 
                             let markerFound = false;
 
+                            // Restart intervals count MCUs in interleaved scans,
+                            // and individual blocks in non-interleaved scans.
+                            // Consume markers at that boundary, before reading
+                            // any symbols or refinement bits from the next unit.
+                            const beginScanUnit = (index) => {
+                                if (!restartIntervalMCUs || index === 0 || index % restartIntervalMCUs !== 0) return true;
+                                let restartPos = reader.pos;
+                                if (d[restartPos] !== 0xFF) { markerFound = true; return false; }
+                                while (d[restartPos] === 0xFF) restartPos++;
+                                const expected = M.RST0 + ((index / restartIntervalMCUs - 1) & 7);
+                                if (d[restartPos] !== expected) { markerFound = true; return false; }
+                                reader.pos = restartPos + 1; // also discards padding bits
+                                predDC = [0, 0, 0];
+                                eob_run = 0;
+                                successiveACState = 0;
+                                successiveACNextValue = 0;
+                                acRun = 0;
+                                return true;
+                            };
+
                             const decodeDCFirst = (blockOffset, c) => {
                                 let s = rh(c.dcNode);
                                 if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(c.dcNode); }
@@ -2050,6 +2070,7 @@ const JpegCORE = {
                                 if (!compBlockOffsetsCache[c.type]) buildCompBlockOrder(c.type);
                                 const orderedOffsets = compBlockOffsetsCache[c.type] || new Int32Array(0);
                                 for (let i = 0; i < orderedOffsets.length; i++) {
+                                    if (!beginScanUnit(i)) break;
                                     const blockOffset = orderedOffsets[i];
                                     if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
                                     decodeBlockFn(blockOffset, c);
@@ -2057,6 +2078,7 @@ const JpegCORE = {
                                 }
                             } else {
                                 for (let m = 0; m < cols * rows; m++) {
+                                    if (!beginScanUnit(m)) break;
                                     for (let c of comps) {
                                         const blkIndices = typeToIndices[c.type];
                                         if (!blkIndices) continue;
@@ -2703,8 +2725,10 @@ const JpegCORE = {
 
     // --- 6. ENCODER (v1.7.7 - Added forceNewQuality) ---
     Encoder: class {
-        constructor(quality, customL, customC) {
+        constructor(quality = 50, customL, customC) {
             const C = JpegCORE.Constants;
+            if (!Number.isFinite(quality)) throw new RangeError("JPEG quality must be a finite number");
+            quality = Math.max(1, Math.min(100, Math.trunc(quality)));
 
             const toNatural = (zz) => {
                 const n = new Uint8Array(64);
@@ -2718,7 +2742,7 @@ const JpegCORE = {
                 this.tC = customC;
             } else {
                 const s = quality < 50 ? 5000 / quality : 200 - quality * 2;
-                const scale = (tbl) => tbl.map(v => Math.floor((v * s + 50) / 100) || 1);
+                const scale = (tbl) => tbl.map(v => Math.max(1, Math.min(255, Math.floor((v * s + 50) / 100))));
                 this.tY = toNatural(scale(C.QUANT_L));
                 this.tC = toNatural(scale(C.QUANT_C));
             }
@@ -2947,7 +2971,11 @@ const JpegCORE = {
                     }
                 }
             }
-            return { blocks: allBlocks, w, h, mode };
+            return {
+                blocks: allBlocks, w, h, mode,
+                quantTables: { 0: this.tY, 1: this.tC },
+                compMap: [0, 1, 2].map(type => ({ type, tq: type === 0 ? 0 : 1 }))
+            };
         }
 
         save(captured, metaSegments, forceNewQuality = false) {
@@ -2991,9 +3019,28 @@ const JpegCORE = {
             wr(0xFF00 | M.SOS); wr(6 + 2 * numComps); wb(numComps); wb(1); wb(0); if (!isGray) { wb(2); wb(0x11); wb(3); wb(0x11); } wb(0); wb(63); wb(0);
 
             let pd = [0, 0, 0];
+            const sourceQT = {};
+            if (captured.quantTables) {
+                for (const c of captured.compMap || [0, 1, 2].map(type => ({ type, tq: type === 0 ? 0 : 1 }))) {
+                    sourceQT[c.type] = captured.quantTables[c.tq];
+                }
+            }
+            const requantized = new Int32Array(64);
             for (let i = 0; i < captured.blocks.length; i++) {
                 const blkObj = captured.blocks[i], compIdx = blkObj.comp;
-                pd[compIdx] = this.ems(blkObj.data, pd[compIdx], compIdx === 0 ? this.hLD : this.hCD, compIdx === 0 ? this.hLA : this.hCA);
+                let data = blkObj.data;
+                if (forceNewQuality && !sourceQT[compIdx]) {
+                    throw new Error("Changing JPEG quality requires the original quantization tables");
+                }
+                if (forceNewQuality && sourceQT[compIdx]) {
+                    const oldQT = sourceQT[compIdx], newQT = compIdx === 0 ? qY : qC;
+                    for (let k = 0; k < 64; k++) {
+                        const value = data[k] * oldQT[k] / newQT[k];
+                        requantized[k] = value < 0 ? -Math.round(-value) : Math.round(value);
+                    }
+                    data = requantized;
+                }
+                pd[compIdx] = this.ems(data, pd[compIdx], compIdx === 0 ? this.hLD : this.hCD, compIdx === 0 ? this.hLA : this.hCA);
             }
             if (this.cnt > 0) this.wbt(0x7F >>> (8 - this.cnt), 8 - this.cnt);
             wr(0xFF00 | M.EOI);

@@ -1103,6 +1103,26 @@
 
                             let markerFound = false;
 
+                            // Restart intervals count MCUs in interleaved scans,
+                            // and individual blocks in non-interleaved scans.
+                            // Consume markers at that boundary, before reading
+                            // any symbols or refinement bits from the next unit.
+                            const beginScanUnit = (index) => {
+                                if (!restartIntervalMCUs || index === 0 || index % restartIntervalMCUs !== 0) return true;
+                                let restartPos = reader.pos;
+                                if (d[restartPos] !== 0xFF) { markerFound = true; return false; }
+                                while (d[restartPos] === 0xFF) restartPos++;
+                                const expected = M.RST0 + ((index / restartIntervalMCUs - 1) & 7);
+                                if (d[restartPos] !== expected) { markerFound = true; return false; }
+                                reader.pos = restartPos + 1; // also discards padding bits
+                                predDC = [0, 0, 0];
+                                eob_run = 0;
+                                successiveACState = 0;
+                                successiveACNextValue = 0;
+                                acRun = 0;
+                                return true;
+                            };
+
                             const decodeDCFirst = (blockOffset, c) => {
                                 let s = rh(c.dcNode);
                                 if (s === STAT_RST) { predDC = [0, 0, 0]; s = rh(c.dcNode); }
@@ -1257,6 +1277,7 @@
                                 if (!compBlockOffsetsCache[c.type]) buildCompBlockOrder(c.type);
                                 const orderedOffsets = compBlockOffsetsCache[c.type] || new Int32Array(0);
                                 for (let i = 0; i < orderedOffsets.length; i++) {
+                                    if (!beginScanUnit(i)) break;
                                     const blockOffset = orderedOffsets[i];
                                     if (blockOffset + 64 > coeffBuffer.length) { markerFound = true; break; }
                                     decodeBlockFn(blockOffset, c);
@@ -1264,6 +1285,7 @@
                                 }
                             } else {
                                 for (let m = 0; m < cols * rows; m++) {
+                                    if (!beginScanUnit(m)) break;
                                     for (let c of comps) {
                                         const blkIndices = typeToIndices[c.type];
                                         if (!blkIndices) continue;
