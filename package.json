@@ -27,7 +27,7 @@
     "build": "node scripts/build-core.js",
     "build:noarith": "node scripts/build-core.js --no-arithmetic --output JPEGcore.noarith.js",
     "pretest": "npm run build",
-    "test": "node tests/smoke.test.js && node tests/render.test.js && node tests/contracts.test.js && node tests/decode-fixtures.test.js && node tests/encode-roundtrip.test.js && node tests/arithmetic-fixture.test.js && node tests/node-runtime.test.js && node tests/quantization.test.js && node tests/restart.test.js && node tests/transform.test.js && node tests/save-tables.test.js && node tests/input-validation.test.js && node tests/wide-quantization.test.js && node tests/color-space.test.js && node tests/sampling-validation.test.js && node tests/decode-limits.test.js",
+    "test": "node tests/smoke.test.js && node tests/render.test.js && node tests/contracts.test.js && node tests/decode-fixtures.test.js && node tests/encode-roundtrip.test.js && node tests/arithmetic-fixture.test.js && node tests/node-runtime.test.js && node tests/quantization.test.js && node tests/restart.test.js && node tests/transform.test.js && node tests/save-tables.test.js && node tests/input-validation.test.js && node tests/wide-quantization.test.js && node tests/color-space.test.js && node tests/sampling-validation.test.js && node tests/decode-limits.test.js && node tests/scan-validation.test.js",
     "fixture:sof10": "node scripts/generate-sof10-fixture.js",
     "arith:golden": "node scripts/arithmetic-golden-compare.js",
     "trace:export": "node scripts/arith-trace-export.js",

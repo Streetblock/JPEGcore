@@ -12,7 +12,11 @@ async function main() {
   const withoutAdobe = Buffer.concat([rgb.subarray(0, app14), rgb.subarray(end)]);
   const numericIds = Buffer.from(rgb);
   const sof = numericIds.indexOf(Buffer.from([0xff, 0xc0]));
-  for (let i = 0; i < 3; i++) numericIds[sof + 10 + i * 3] = i + 1;
+  const sos = numericIds.indexOf(Buffer.from([0xff, 0xda]));
+  for (let i = 0; i < 3; i++) {
+    numericIds[sof + 10 + i * 3] = i + 1;
+    numericIds[sos + 5 + i * 2] = i + 1;
+  }
   for (const bytes of [rgb, withoutAdobe, numericIds]) {
     await assert.rejects(core.JpegJsCompat.decode(bytes), /Unsupported JPEG color space: RGB/);
     await assert.rejects(core.Decoder.extractBlocksStruct(new Blob([bytes])), /Unsupported JPEG color space: RGB/);

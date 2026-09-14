@@ -2,7 +2,7 @@
 
 **Aktualisiert am 15.09.2026 · Stand: `main`, einschließlich der mit diesem Dokument eingecheckten Fixes. Ausgangspunkt der Nachprüfung: `55e64d1`.**
 
-**Status: Alle neun ursprünglichen Befunde und Befunde 10–12 sind behoben. Zwei weitere Befunde (13–14) sind offen und reproduziert.** Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
+**Status: Alle neun ursprünglichen Befunde und Befunde 10–13 sind behoben. Befund 14 ist noch offen und reproduziert.** Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
 
 Schwerpunkt: JavaScript-Library in `Repo/src`, ausgeliefertes Bundle, Paket-Einstieg und Tests. `Referenz` und lokale libjpeg-turbo-Werkzeuge dienen als unabhängige Vergleiche. Der experimentelle `rust-port` ist nicht Gegenstand eines vollständigen Reviews. Neue Fixes werden einzeln mit Regressionstests, Build-Ausgabe und aktualisiertem Review-Status eingecheckt.
 
@@ -59,13 +59,13 @@ Die Optionen `maxResolutionInMP` und `maxMemoryUsageInMB` werden nicht ausgewert
 
 Behebung: `maxResolutionInMP` wird validiert und vor der großen Koeffizientenallokation sowie vor nativem Decodieren durchgesetzt. Das gilt für den Wrapper und beide Block-Decoder. `maxMemoryUsageInMB` wird ausdrücklich als **nicht implementiert** abgelehnt, bereits vor dem Lesen/Kopieren der Eingabe. Die stille Missachtung beider Optionen ist damit behoben; ein echtes Speicherbudget bleibt eine mögliche Erweiterung. Das Auflösungslimit ersetzt kein Gesamt-Speicherlimit. Regression: `tests/decode-limits.test.js`, einschließlich exakter Pixelgrenze, ungültiger Werte, aller drei APIs und progressivem Decode mit nativer Option.
 
-### 13. [P2] OFFEN – JPEG ohne einzigen Scan wird als graues Bild akzeptiert
+### 13. [P2] BEHOBEN – JPEG ohne einzigen Scan wird als graues Bild akzeptiert
 
 Stelle: `src/decoder.js`, Header-/Scan-Verarbeitung; Ergebnisprüfung in `src/jpeg-js-compat.js`.
 
 Ein Bytepuffer mit SOI, einem SOF0 für ein 8×8-Graubild und EOI, jedoch ohne SOS und ohne Bilddaten, liefert erfolgreich ein 8×8-Bild mit Pixelwerten `[128, 128, 128, 255]`. Gültige Dimensionen und ein angelegter Koeffizientenpuffer reichen derzeit aus, um die Ergebnisprüfung zu bestehen.
 
-Nächster Schritt: Mindestens einen tatsächlich verarbeiteten Scan verlangen und strukturell unvollständige Dateien mit einem verständlichen Fehler ablehnen. Das ist eine verbleibende Validierungslücke, nicht der bereits behobene Legacy-TypeError.
+Behebung: Ein SOS-Scan ist vor der Koeffizientenallokation zwingend erforderlich. SOS-Längen und Komponenten-IDs werden validiert; leere Huffman-Scans werden abgelehnt. Alle drei APIs propagieren einen verständlichen `Invalid JPEG scan`-Fehler. Regression: `tests/scan-validation.test.js`, einschließlich fehlendem/abgeschnittenem SOS, leeren Daten, ungültigen Komponenten und einem gültigen grauen Bild. Dies ist keine vollständige strikte Prüfung jedes Entropie-Bits beschädigter Dateien.
 
 ### 14. [P2] OFFEN – Flache Blockdaten lassen sich nach Transformation nicht speichern
 
@@ -77,7 +77,7 @@ Nächster Schritt: `save` um die flache Repräsentation erweitern oder eine expl
 
 ## Aktuelle Validierung und Grenzen
 
-- `npm.cmd test` am 15.09.2026 erneut erfolgreich: Build und alle **16 Testsuiten**.
+- `npm.cmd test` am 15.09.2026 erneut erfolgreich: Build und alle **17 Testsuiten**.
 - `node tests/node-runtime.test.js` zusätzlich erfolgreich: Der tatsächliche Paket-Einstieg mit `require("..")` funktioniert ohne Browser-Polyfills.
 - `node artifacts/review/more-findings.cjs` reproduzierte Befunde 10–14 auf `55e64d1`. Behobene Fälle werden jetzt durch die bei den Befunden genannten Tests in `npm test` abgesichert. Offene Befunde sind durch grüne bestehende Tests nicht ausgeschlossen.
 - Der im selben Skript geprüfte einfache 4:4:4-Fall für `Glitch.swapChannels` zeigte zwischen Vorschau und gespeichertem Bild keine Abweichung. Daraus wird kein weiterer bestätigter Fehler abgeleitet.

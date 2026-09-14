@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rejected JPEG frames without an image scan, malformed SOS headers and empty Huffman scans instead of returning a successful gray image.
+
 - Enforced optional maxResolutionInMP before coefficient allocation/native decoding; explicitly rejected the unimplemented maxMemoryUsageInMB option instead of ignoring it.
 
 - Validated all component sampling factors; rejected unsupported layouts such as 4:4:0 instead of treating them as 4:4:4.

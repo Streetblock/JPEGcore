@@ -69,6 +69,9 @@ separate `Constants.MAX_DIMENSION` limit still applies when reading images.
 `Decoder.extractBlocks` rejects unsupported or invalid JPEGs with a descriptive
 error; `extractBlocksStruct` retains its empty-result fallback for general parse
 failures, but propagates explicit unsupported-format and resource-option errors.
+All decode entry points reject frames without an SOS image scan, malformed
+SOS headers and Huffman scans without image data. This is not a strict
+validation of every entropy-coded bit in otherwise partially damaged files.
 
 Decoding accepts both 8-bit and 16-bit quantization tables, including mixed
 precision tables. This does not add support for 12-bit sample precision.

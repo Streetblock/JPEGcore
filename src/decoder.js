@@ -310,6 +310,7 @@
                 let isProgressive = false;
                 let isArithmetic = false;
                 let adobeTransform = null;
+                let firstScanPosition = -1;
                 let restartIntervalMCUs = 0;
                 let tables = { 0: { 0: makeTree(H.DC_L_NR, H.DC_L_VAL), 1: makeTree(H.DC_C_NR, H.DC_C_VAL) }, 1: { 0: makeTree(H.AC_L_NR, H.AC_L_VAL), 1: makeTree(H.AC_C_NR, H.AC_C_VAL) } };
                 const quantTables = {};
@@ -373,13 +374,36 @@
                     };
                 };
 
+                const validateScanHeader = (markerPos) => {
+                    if (markerPos + 3 >= d.length) throw new Error("Invalid JPEG scan: truncated SOS header");
+                    const length = (d[markerPos + 1] << 8) | d[markerPos + 2];
+                    const end = markerPos + 1 + length;
+                    const count = d[markerPos + 3];
+                    if (count < 1 || count > compMapList.length || length !== 6 + 2 * count || end > d.length) {
+                        throw new Error("Invalid JPEG scan: invalid SOS header length or component count");
+                    }
+                    const ids = new Set();
+                    for (let i = 0; i < count; i++) {
+                        const id = d[markerPos + 4 + i * 2];
+                        if (ids.has(id) || !compMapList.some(component => component.id === id)) {
+                            throw new Error("Invalid JPEG scan: unknown or duplicate component");
+                        }
+                        ids.add(id);
+                    }
+                    if (!isArithmetic && (end >= d.length || (d[end] === 0xFF && d[end + 1] !== 0))) {
+                        throw new Error("Invalid JPEG scan: missing Huffman image data");
+                    }
+                    return end;
+                };
+
                 while (pos < d.length - 1) {
                     if (d[pos] !== 0xFF) { pos++; continue; }
                     while (d[pos] === 0xFF && pos < d.length) pos++;
                     if (pos >= d.length) break;
                     const marker = d[pos];
 
-                    if (marker === M.SOS) break;
+                    if (marker === M.SOS) { firstScanPosition = pos; break; }
+                    if (marker === M.EOI) break;
 
                     if (pos + 2 >= d.length) break;
                     const len = (d[pos + 1] << 8) | d[pos + 2];
@@ -438,6 +462,8 @@
                 }
 
                 if (!w || !h || !mcuStructure) return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
+                if (firstScanPosition < 0) throw new Error("Invalid JPEG scan: missing SOS image scan");
+                validateScanHeader(firstScanPosition);
                 const hasRgbIds = compMapList.length === 3 &&
                     compMapList.every((component, i) => component.id === [82, 71, 66][i]);
                 if (compMapList.length !== 1 && compMapList.length !== 3) {
@@ -530,9 +556,7 @@
                         const marker = d[pos];
 
                         if (marker === M.SOS) {
-                            const len = (d[pos + 1] << 8) | d[pos + 2];
-                            const sosEnd = pos + 1 + len;
-                            if (sosEnd > d.length) break;
+                            const sosEnd = validateScanHeader(pos);
 
                             const ns = d[pos + 3];
                             const comps = [];
@@ -552,7 +576,6 @@
                                     });
                                 }
                             }
-                            if (comps.length === 0) comps.push({type:0, dcTbl:0, acTbl:0});
 
                             const Ss = d[sosEnd - 3], Se = d[sosEnd - 2], AhAl = d[sosEnd - 1];
                             const Ah = (AhAl >> 4) & 0xF, Al = AhAl & 0xF;
@@ -1364,6 +1387,7 @@
                         else { const len = (d[pos + 1] << 8) | d[pos + 2]; pos += 1 + len; }
                     }
                 } catch (e) {
+                    if (e && e.message && e.message.startsWith("Invalid JPEG scan:")) throw e;
                     if (e && typeof e.message === "string" && e.message.includes("Arithmetic JPEG")) {
                         throw e;
                     }
@@ -1373,6 +1397,7 @@
                 return { coeffBuffer, blockList, w, h, mode: finalMode, quantTables, compMap: compMapList, restartIntervalMCUs, decodeBackend: 'internal' };
 
             } catch (globalErr) {
+                if (globalErr && globalErr.message && globalErr.message.startsWith("Invalid JPEG scan:")) throw globalErr;
                 if (globalErr && globalErr.code === "JPEG_RESOLUTION_LIMIT") throw globalErr;
                 if (globalErr && globalErr.message && globalErr.message.startsWith("Unsupported JPEG")) throw globalErr;
                 if (globalErr && typeof globalErr.message === "string" && globalErr.message.includes("Arithmetic JPEG")) {
