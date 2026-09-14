@@ -1,8 +1,8 @@
 # JPEGcore – Code-Review vom 14.09.2026
 
-**Aktualisiert am 14.09.2026 · Stand: `main`, einschließlich der mit diesem Dokument eingecheckten Fixes. Ausgangspunkt der Nachprüfung: `55e64d1`.**
+**Aktualisiert am 15.09.2026 · Stand: `main`, einschließlich der mit diesem Dokument eingecheckten Fixes. Ausgangspunkt der Nachprüfung: `55e64d1`.**
 
-**Status: Alle neun ursprünglichen Befunde und Befund 10 sind behoben. Vier weitere Befunde (11–14) sind offen und reproduziert.** Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
+**Status: Alle neun ursprünglichen Befunde und Befunde 10–11 sind behoben. Drei weitere Befunde (12–14) sind offen und reproduziert.** Die Behebung bezieht sich auf den Repository-Stand; eine Veröffentlichung der Fixes in der npm-Registry wurde nicht überprüft.
 
 Schwerpunkt: JavaScript-Library in `Repo/src`, ausgeliefertes Bundle, Paket-Einstieg und Tests. `Referenz` und lokale libjpeg-turbo-Werkzeuge dienen als unabhängige Vergleiche. Der experimentelle `rust-port` ist nicht Gegenstand eines vollständigen Reviews. Neue Fixes werden einzeln mit Regressionstests, Build-Ausgabe und aktualisiertem Review-Status eingecheckt.
 
@@ -43,13 +43,13 @@ Ein mit `cjpeg -quality 90 -rgb -sample 1x1` erzeugtes RGB-JPEG wird angenommen,
 
 Behebung: RGB anhand von Adobe APP14 oder RGB-Komponenten-IDs erkennen und mit `Unsupported JPEG color space` ablehnen; ebenso CMYK/YCCK. Damit entfällt die stille Ausgabe falscher Farben. Die Unterstützung dieser Farbräume bleibt eine mögliche Erweiterung. Regression: `tests/color-space.test.js` mit unabhängiger RGB-Fixture, beiden Erkennungswegen, allen drei Decode-Einstiegen und weiterhin akzeptiertem YCbCr mit APP14.
 
-### 11. [P1] OFFEN – 4:4:0-Sampling wird als 4:4:4 behandelt
+### 11. [P1] BEHOBEN – 4:4:0-Sampling wird als 4:4:4 behandelt
 
 Stelle: `src/decoder.js`, SOF-Sampling-Erkennung: nur `0x22` und `0x21` werden gesondert erkannt; sonst wird `444` gewählt.
 
 Ein mit `cjpeg -quality 90 -sample 1x2` erzeugtes JPEG mit vertikalem Chroma-Subsampling wird angenommen und falsch decodiert. Beim 17×19-Testbild beträgt der mittlere absolute RGB-Kanalfehler gegenüber libjpeg-turbo **77,60 von 255**.
 
-Nächster Schritt: Sampling-Geometrie vollständig unterstützen oder nicht unterstützte Kombinationen vor dem Decodieren ausdrücklich ablehnen.
+Behebung: Sampling-Faktoren aller Komponenten vor der Koeffizientenallokation prüfen. Unterstützt bleiben GRAY 1x1 und YCbCr 444/422/420 mit Chroma 1x1; andere Kombinationen werden mit `Unsupported JPEG sampling` abgelehnt. 4:4:0-Unterstützung bleibt eine mögliche Erweiterung. Regression: `tests/sampling-validation.test.js`, unabhängige 4:4:0-Fixture, abweichende Y/Cb/Cr-Faktoren und gültige unterstützte Modi.
 
 ### 12. [P2] OFFEN – Angeforderte Decode-Ressourcenlimits werden ignoriert
 
@@ -77,7 +77,7 @@ Nächster Schritt: `save` um die flache Repräsentation erweitern oder eine expl
 
 ## Aktuelle Validierung und Grenzen
 
-- `npm.cmd test` am 14.09.2026 erneut erfolgreich: Build und alle **14 Testsuiten**.
+- `npm.cmd test` am 15.09.2026 erneut erfolgreich: Build und alle **15 Testsuiten**.
 - `node tests/node-runtime.test.js` zusätzlich erfolgreich: Der tatsächliche Paket-Einstieg mit `require("..")` funktioniert ohne Browser-Polyfills.
 - `node artifacts/review/more-findings.cjs` reproduzierte Befunde 10–14 auf `55e64d1`. Behobene Fälle werden jetzt durch die bei den Befunden genannten Tests in `npm test` abgesichert. Offene Befunde sind durch grüne bestehende Tests nicht ausgeschlossen.
 - Der im selben Skript geprüfte einfache 4:4:4-Fall für `Glitch.swapChannels` zeigte zwischen Vorschau und gespeichertem Bild keine Abweichung. Daraus wird kein weiterer bestätigter Fehler abgeleitet.

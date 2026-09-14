@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Validated all component sampling factors; rejected unsupported layouts such as 4:4:0 instead of treating them as 4:4:4.
+
 - Rejected RGB component and CMYK/YCCK JPEGs explicitly instead of decoding them as YCbCr.
 
 - Decoded 16-bit quantization tables without truncation and exposed them through image analysis.

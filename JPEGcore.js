@@ -1269,6 +1269,14 @@ const JpegCORE = {
                 if (adobeTransform !== null && adobeTransform !== 0 && adobeTransform !== 1) {
                     throw new Error("Unsupported JPEG color space: Adobe transform " + adobeTransform);
                 }
+                const supportedSampling = compMapList.length === 1
+                    ? compMapList[0].samp === 0x11
+                    : [0x11, 0x21, 0x22].includes(compMapList[0].samp) &&
+                      compMapList.slice(1).every(component => component.samp === 0x11);
+                if (!supportedSampling) {
+                    throw new Error("Unsupported JPEG sampling: " +
+                        compMapList.map(component => "0x" + component.samp.toString(16)).join(", "));
+                }
                 if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
                     throw new Error(`Bildmaße zu groß: ${w}x${h}`);
                 }

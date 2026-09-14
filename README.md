@@ -65,6 +65,9 @@ precision tables. This does not add support for 12-bit sample precision.
 RGB component JPEGs (identified by Adobe APP14 or RGB component IDs) and
 CMYK/YCCK JPEGs are rejected with an explicit unsupported-color-space error.
 The decoder currently supports grayscale and YCbCr component data.
+Supported sampling is grayscale 1x1 or YCbCr 4:4:4, 4:2:2 and 4:2:0
+(chroma factors 1x1). Other sampling layouts, including 4:4:0, are rejected
+with an explicit unsupported-sampling error.
 The encoder still writes baseline JPEGs with 8-bit quantizers: preserving a
 table containing values above 255 with `save` is rejected; request a quality
 change with `forceNewQuality` to re-quantize into the baseline range instead.
