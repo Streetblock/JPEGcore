@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Decoded 16-bit quantization tables without truncation and exposed them through image analysis.
+- Validated encoder dimensions and pixel-buffer lengths before processing input.
+- Replaced the legacy decoder's invalid-input TypeError with a descriptive JPEG error.
+- Returned Node.js Buffers consistently for explicit useTArray: false in RGB and RGBA modes.
+
 - Fixed reduced-scale rendering at 50%, 25%, and 12.5%, including odd dimensions and subsampled color.
 - Exported the CommonJS package and removed the Node.js requirement for browser ImageData.
 - Completed the chroma quantization table, clamped encoder quantizers, and corrected quality changes through re-quantization.

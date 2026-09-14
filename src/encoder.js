@@ -195,6 +195,7 @@
         }
 
         captureBlocks(imgData, mode) {
+            JpegCORE.Utils.validateRgbaImage(imgData);
             const w = imgData.width, h = imgData.height, d = imgData.data;
             const sm = JpegCORE.Constants.SAMPLE_MODES[mode] || JpegCORE.Constants.SAMPLE_MODES['420'];
             const mcuW = sm.hMax * 8, mcuH = sm.vMax * 8;
@@ -254,6 +255,7 @@
         }
 
         save(captured, metaSegments, forceNewQuality = false) {
+            JpegCORE.Utils.validateJpegDimensions(captured && captured.w, captured && captured.h);
             this.buf = []; this.byte = 0; this.cnt = 0;
             const M = JpegCORE.Constants.MARKERS;
             const wr = (v) => { this.buf.push((v >> 8) & 0xFF, v & 0xFF); }, wb = (v) => { this.buf.push(v); };
@@ -331,6 +333,7 @@
         }
 
         encodeImageData(imgData, mode) {
+            JpegCORE.Utils.validateRgbaImage(imgData);
             this.buf = []; this.byte = 0; this.cnt = 0;
             const M = JpegCORE.Constants.MARKERS;
             const wr = (v) => { this.buf.push((v >> 8) & 0xFF, v & 0xFF); }, wb = (v) => { this.buf.push(v); };

@@ -45,10 +45,26 @@ console.log(decoded.width, decoded.height, decoded.data.length);
 
 `decode(...)` returns the `jpeg-js` shape: `{ data, width, height }`.
 
+`useTArray` defaults to `true`. Set it to `false` to receive a Node.js `Buffer`,
+for either RGB or RGBA output. Environments without `Buffer` must use
+`useTArray: true`.
+
 The Node.js wrappers use the built-in `Blob` and do not require a canvas or
 `ImageData` polyfill. `Decoder.render(...)` returns a `{ data, width, height }`
 pixel object when `ImageData` is unavailable; in browsers it returns native
 `ImageData`.
+
+Encoder dimensions must be integer numbers from 1 to 65535; invalid dimensions
+and mismatched pixel-buffer lengths are rejected before encoding. The decoder's
+separate `Constants.MAX_DIMENSION` limit still applies when reading images.
+`Decoder.extractBlocks` rejects unsupported or invalid JPEGs with a descriptive
+error; `extractBlocksStruct` retains its empty-result fallback for those inputs.
+
+Decoding accepts both 8-bit and 16-bit quantization tables, including mixed
+precision tables. This does not add support for 12-bit sample precision.
+The encoder still writes baseline JPEGs with 8-bit quantizers: preserving a
+table containing values above 255 with `save` is rejected; request a quality
+change with `forceNewQuality` to re-quantize into the baseline range instead.
 
 ## Usage (Browser)
 

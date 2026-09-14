@@ -55,6 +55,43 @@ const JpegCORE = {
 
     Utils: {
 
+        validateJpegDimensions: function(width, height) {
+            if (!Number.isInteger(width) || !Number.isInteger(height) ||
+                width < 1 || height < 1 || width > 65535 || height > 65535) {
+                throw new RangeError("JPEG dimensions must be integers in the range 1..65535");
+            }
+        },
+
+        validateRgbaImage: function(image) {
+            if (!image) throw new Error("JPEG input must include dimensions and RGBA data");
+            this.validateJpegDimensions(image.width, image.height);
+            if (!image.data || image.data.length !== image.width * image.height * 4) {
+                throw new Error("JPEG RGBA data length must equal width*height*4");
+            }
+        },
+
+        readQuantizationTables: function(data, start, end) {
+            if (end > data.length || start >= end) throw new Error("Invalid JPEG quantization segment length");
+            const tables = {};
+            const zig = JpegCORE.Constants.ZIG_ZAG;
+            let pos = start;
+            while (pos < end) {
+                const info = data[pos++], precision = info >> 4, id = info & 15;
+                if (precision > 1 || id > 3) throw new Error("Invalid JPEG quantization table specification");
+                const bytesPerValue = precision + 1;
+                if (pos + 64 * bytesPerValue > end) throw new Error("Truncated JPEG quantization table");
+                const table = precision ? new Uint16Array(64) : new Uint8Array(64);
+                for (let z = 0; z < 64; z++) {
+                    let value = data[pos++];
+                    if (precision) value = (value << 8) | data[pos++];
+                    // Retain the tolerant decoder's historical zero fallback.
+                    table[zig[z]] = value || 10;
+                }
+                tables[id] = table;
+            }
+            return tables;
+        },
+
         // Preserve native ImageData in browsers; Node callers only need the
         // pixel buffer and dimensions and should not require a canvas polyfill.
         createImageData: function(dataOrWidth, width, height) {
@@ -687,18 +724,9 @@ const JpegCORE = {
                                 else if (ySamp === 0x11) detectedSamp = '444';
                                 infoStr += `[Fmt:${detectedSamp}] `;
                             } else if (type === M.DQT) {
-                                let subPos = pos + 4, end = pos + 2 + len;
-                                while (subPos < end) {
-                                    const info = d[subPos++];
-                                    const id = info & 0x0F, precision = (info >> 4) & 0x0F;
-                                    if (precision === 0) {
-                                        const rawZZ = d.slice(subPos, subPos + 64);
-                                        const natural = new Uint8Array(64);
-                                        for (let i = 0; i < 64; i++) natural[ZZ[i]] = rawZZ[i];
-                                        if (id === 0) qtL = natural; if (id === 1) qtC = natural;
-                                        subPos += 64;
-                                    } else { subPos += 64 * 2; }
-                                }
+                                const tables = JpegCORE.Utils.readQuantizationTables(d, pos + 4, pos + 2 + len);
+                                if (tables[0]) qtL = tables[0];
+                                if (tables[1]) qtC = tables[1];
                             } else if (type === M.DHT) {
                                 let subPos = pos + 4, end = pos + 2 + len;
                                 while (subPos < end) {
@@ -1095,7 +1123,9 @@ const JpegCORE = {
                 };//*/
 
                 // --- Parser Header ---
-                if (d.length < 2) throw new Error("File too short");
+                if (d.length < 2 || d[0] !== 0xFF || d[1] !== M.SOI) {
+                    return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
+                }
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
                 let isProgressive = false;
                 let isArithmetic = false;
@@ -1211,14 +1241,7 @@ const JpegCORE = {
                             tables[tc][th] = makeTree(nr, val);
                         }
                     } else if (marker === M.DQT) {
-                        let subPos = pos + 3;
-                        while (subPos < segmentEnd) {
-                            const info = d[subPos++];
-                            const id = info & 0x0F;
-                            const naturalTbl = new Uint8Array(64);
-                            for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10;
-                            quantTables[id] = naturalTbl;
-                        }
+                        Object.assign(quantTables, utils.readQuantizationTables(d, pos + 3, segmentEnd));
                     } else if (marker === M.DRI) {
                         if (pos + 5 < d.length) {
                             restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
@@ -2154,7 +2177,7 @@ const JpegCORE = {
             // 1. Die neue, schnelle Funktion aufrufen
             const optimized = await this.extractBlocksStruct(file);
 
-            if (optimized.preDecodedData && !optimized.blockList) {
+            if (optimized && optimized.preDecodedData && !optimized.blockList) {
                 return {
                     blocks: [],
                     preDecodedData: optimized.preDecodedData,
@@ -2166,6 +2189,10 @@ const JpegCORE = {
                     isProgressiveFallback: optimized.isProgressiveFallback,
                     decodeBackend: optimized.decodeBackend
                 };
+            }
+
+            if (!optimized || !optimized.w || !optimized.h || !optimized.blockList || !optimized.coeffBuffer) {
+                throw new Error("Decoder.extractBlocks: unsupported or invalid JPEG");
             }
 
             // 2. Das "Flat Buffer" Array in einzelne Block-Objekte zerlegen (Legacy Format)
@@ -2990,6 +3017,7 @@ const JpegCORE = {
         }
 
         captureBlocks(imgData, mode) {
+            JpegCORE.Utils.validateRgbaImage(imgData);
             const w = imgData.width, h = imgData.height, d = imgData.data;
             const sm = JpegCORE.Constants.SAMPLE_MODES[mode] || JpegCORE.Constants.SAMPLE_MODES['420'];
             const mcuW = sm.hMax * 8, mcuH = sm.vMax * 8;
@@ -3049,6 +3077,7 @@ const JpegCORE = {
         }
 
         save(captured, metaSegments, forceNewQuality = false) {
+            JpegCORE.Utils.validateJpegDimensions(captured && captured.w, captured && captured.h);
             this.buf = []; this.byte = 0; this.cnt = 0;
             const M = JpegCORE.Constants.MARKERS;
             const wr = (v) => { this.buf.push((v >> 8) & 0xFF, v & 0xFF); }, wb = (v) => { this.buf.push(v); };
@@ -3126,6 +3155,7 @@ const JpegCORE = {
         }
 
         encodeImageData(imgData, mode) {
+            JpegCORE.Utils.validateRgbaImage(imgData);
             this.buf = []; this.byte = 0; this.cnt = 0;
             const M = JpegCORE.Constants.MARKERS;
             const wr = (v) => { this.buf.push((v >> 8) & 0xFF, v & 0xFF); }, wb = (v) => { this.buf.push(v); };
@@ -3276,8 +3306,12 @@ const JpegCORE = {
                     rgb[di++] = data[i + 2];
                 }
                 data = rgb;
-            } else if (!useTArray) {
-                data = Array.from(data);
+            }
+            if (!useTArray) {
+                if (typeof Buffer === "undefined") {
+                    throw new Error("JpegJsCompat.decode: Buffer is unavailable; use useTArray: true in this environment");
+                }
+                data = Buffer.from(data);
             }
 
             return {
@@ -3290,12 +3324,13 @@ const JpegCORE = {
         // jpeg-js compatible encode wrapper.
         // encode({ data, width, height }, quality) -> { data, width, height }
         encode: function(rawImageData, quality = 50, opts = {}) {
-            if (!rawImageData || !rawImageData.data || !rawImageData.width || !rawImageData.height) {
+            if (!rawImageData || !rawImageData.data) {
                 throw new Error("JpegJsCompat.encode: rawImageData must include data, width, and height");
             }
 
-            const width = rawImageData.width | 0;
-            const height = rawImageData.height | 0;
+            const width = rawImageData.width;
+            const height = rawImageData.height;
+            JpegCORE.Utils.validateJpegDimensions(width, height);
             const src = rawImageData.data;
             const mode = opts.mode || "420";
             const q = Math.max(1, Math.min(100, quality | 0));

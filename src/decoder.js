@@ -302,7 +302,9 @@
                 };//*/
 
                 // --- Parser Header ---
-                if (d.length < 2) throw new Error("File too short");
+                if (d.length < 2 || d[0] !== 0xFF || d[1] !== M.SOI) {
+                    return { blocks: [], w: 0, h: 0, mode: '420', quantTables: {}, compMap: [] };
+                }
                 let pos = 0, w = 0, h = 0, mcuStructure = null, finalMode = '420', compMapList = [];
                 let isProgressive = false;
                 let isArithmetic = false;
@@ -418,14 +420,7 @@
                             tables[tc][th] = makeTree(nr, val);
                         }
                     } else if (marker === M.DQT) {
-                        let subPos = pos + 3;
-                        while (subPos < segmentEnd) {
-                            const info = d[subPos++];
-                            const id = info & 0x0F;
-                            const naturalTbl = new Uint8Array(64);
-                            for (let z = 0; z < 64; z++) naturalTbl[ZZ[z]] = d[subPos++] || 10;
-                            quantTables[id] = naturalTbl;
-                        }
+                        Object.assign(quantTables, utils.readQuantizationTables(d, pos + 3, segmentEnd));
                     } else if (marker === M.DRI) {
                         if (pos + 5 < d.length) {
                             restartIntervalMCUs = ((d[pos + 3] << 8) | d[pos + 4]) >>> 0;
@@ -1361,7 +1356,7 @@
             // 1. Die neue, schnelle Funktion aufrufen
             const optimized = await this.extractBlocksStruct(file);
 
-            if (optimized.preDecodedData && !optimized.blockList) {
+            if (optimized && optimized.preDecodedData && !optimized.blockList) {
                 return {
                     blocks: [],
                     preDecodedData: optimized.preDecodedData,
@@ -1373,6 +1368,10 @@
                     isProgressiveFallback: optimized.isProgressiveFallback,
                     decodeBackend: optimized.decodeBackend
                 };
+            }
+
+            if (!optimized || !optimized.w || !optimized.h || !optimized.blockList || !optimized.coeffBuffer) {
+                throw new Error("Decoder.extractBlocks: unsupported or invalid JPEG");
             }
 
             // 2. Das "Flat Buffer" Array in einzelne Block-Objekte zerlegen (Legacy Format)

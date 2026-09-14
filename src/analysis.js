@@ -135,18 +135,9 @@
                                 else if (ySamp === 0x11) detectedSamp = '444';
                                 infoStr += `[Fmt:${detectedSamp}] `;
                             } else if (type === M.DQT) {
-                                let subPos = pos + 4, end = pos + 2 + len;
-                                while (subPos < end) {
-                                    const info = d[subPos++];
-                                    const id = info & 0x0F, precision = (info >> 4) & 0x0F;
-                                    if (precision === 0) {
-                                        const rawZZ = d.slice(subPos, subPos + 64);
-                                        const natural = new Uint8Array(64);
-                                        for (let i = 0; i < 64; i++) natural[ZZ[i]] = rawZZ[i];
-                                        if (id === 0) qtL = natural; if (id === 1) qtC = natural;
-                                        subPos += 64;
-                                    } else { subPos += 64 * 2; }
-                                }
+                                const tables = JpegCORE.Utils.readQuantizationTables(d, pos + 4, pos + 2 + len);
+                                if (tables[0]) qtL = tables[0];
+                                if (tables[1]) qtC = tables[1];
                             } else if (type === M.DHT) {
                                 let subPos = pos + 4, end = pos + 2 + len;
                                 while (subPos < end) {

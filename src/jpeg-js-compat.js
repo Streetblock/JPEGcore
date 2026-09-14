@@ -32,8 +32,12 @@
                     rgb[di++] = data[i + 2];
                 }
                 data = rgb;
-            } else if (!useTArray) {
-                data = Array.from(data);
+            }
+            if (!useTArray) {
+                if (typeof Buffer === "undefined") {
+                    throw new Error("JpegJsCompat.decode: Buffer is unavailable; use useTArray: true in this environment");
+                }
+                data = Buffer.from(data);
             }
 
             return {
@@ -46,12 +50,13 @@
         // jpeg-js compatible encode wrapper.
         // encode({ data, width, height }, quality) -> { data, width, height }
         encode: function(rawImageData, quality = 50, opts = {}) {
-            if (!rawImageData || !rawImageData.data || !rawImageData.width || !rawImageData.height) {
+            if (!rawImageData || !rawImageData.data) {
                 throw new Error("JpegJsCompat.encode: rawImageData must include data, width, and height");
             }
 
-            const width = rawImageData.width | 0;
-            const height = rawImageData.height | 0;
+            const width = rawImageData.width;
+            const height = rawImageData.height;
+            JpegCORE.Utils.validateJpegDimensions(width, height);
             const src = rawImageData.data;
             const mode = opts.mode || "420";
             const q = Math.max(1, Math.min(100, quality | 0));

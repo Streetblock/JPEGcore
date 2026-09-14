@@ -1,5 +1,42 @@
     Utils: {
 
+        validateJpegDimensions: function(width, height) {
+            if (!Number.isInteger(width) || !Number.isInteger(height) ||
+                width < 1 || height < 1 || width > 65535 || height > 65535) {
+                throw new RangeError("JPEG dimensions must be integers in the range 1..65535");
+            }
+        },
+
+        validateRgbaImage: function(image) {
+            if (!image) throw new Error("JPEG input must include dimensions and RGBA data");
+            this.validateJpegDimensions(image.width, image.height);
+            if (!image.data || image.data.length !== image.width * image.height * 4) {
+                throw new Error("JPEG RGBA data length must equal width*height*4");
+            }
+        },
+
+        readQuantizationTables: function(data, start, end) {
+            if (end > data.length || start >= end) throw new Error("Invalid JPEG quantization segment length");
+            const tables = {};
+            const zig = JpegCORE.Constants.ZIG_ZAG;
+            let pos = start;
+            while (pos < end) {
+                const info = data[pos++], precision = info >> 4, id = info & 15;
+                if (precision > 1 || id > 3) throw new Error("Invalid JPEG quantization table specification");
+                const bytesPerValue = precision + 1;
+                if (pos + 64 * bytesPerValue > end) throw new Error("Truncated JPEG quantization table");
+                const table = precision ? new Uint16Array(64) : new Uint8Array(64);
+                for (let z = 0; z < 64; z++) {
+                    let value = data[pos++];
+                    if (precision) value = (value << 8) | data[pos++];
+                    // Retain the tolerant decoder's historical zero fallback.
+                    table[zig[z]] = value || 10;
+                }
+                tables[id] = table;
+            }
+            return tables;
+        },
+
         // Preserve native ImageData in browsers; Node callers only need the
         // pixel buffer and dimensions and should not require a canvas polyfill.
         createImageData: function(dataOrWidth, width, height) {

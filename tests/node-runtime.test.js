@@ -25,6 +25,20 @@ async function main() {
     if (reference) assert.deepEqual(image.data, reference);
     reference = image.data;
   }
+  for (const formatAsRGBA of [true, false]) {
+    const expected = formatAsRGBA ? reference : reference.filter((_, i) => i % 4 !== 3);
+    for (const useTArray of [true, false]) {
+      const image = await JpegCORE.JpegJsCompat.decode(bytes, { useTArray, formatAsRGBA });
+      assert.equal(Buffer.isBuffer(image.data), !useTArray);
+      assert.deepEqual(Array.from(image.data), Array.from(expected), "output container must not change pixels");
+    }
+  }
+  const { JpegCORE: browserCore } = require("./helpers/load-core").loadCore();
+  for (const formatAsRGBA of [true, false]) {
+    await assert.rejects(browserCore.JpegJsCompat.decode(bytes, { useTArray: false, formatAsRGBA }), /Buffer is unavailable.*useTArray: true/);
+    const image = await browserCore.JpegJsCompat.decode(bytes, { useTArray: true, formatAsRGBA });
+    assert.equal(image.data.length, 17 * 15 * (formatAsRGBA ? 4 : 3));
+  }
   const progressive = fs.readFileSync(path.join(__dirname, "fixtures/jpeg/is-progressive-progressive.jpg"));
   const image = await JpegCORE.JpegJsCompat.decode(progressive);
   assert.ok(image.width > 0 && image.height > 0);
